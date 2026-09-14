@@ -1,0 +1,8 @@
+# Runtime folders: videos and generated files stay out of version control
+/inbox/*
+!/inbox/.gitkeep
+/work/
+/output/
+/failed/
+
+.DS_Store
