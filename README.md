@@ -32,6 +32,107 @@ Or leave a watcher running and just drop files into `inbox/`:
 ./optimize.sh --watch
 ```
 
+## Demo
+
+You can try it without your own footage. These commands use the same Docker
+image to generate two 10-second clips in `inbox/`, both exported at very high
+quality the way raw exports usually are:
+
+- **`Product Demo.mov`:** a 1080p, 60 fps test pattern with a tone. It has flat
+  areas and sharp edges, like screen recordings and motion graphics.
+- **`background-loop.mp4`:** a portrait 1080×1920 fractal zoom with constant fine
+  detail. This is hard to compress, like foliage, water or film grain.
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/inbox":/out --entrypoint ffmpeg \
+  linuxserver/ffmpeg:9.0-cli-ls81 -hide_banner -loglevel error \
+  -f lavfi -i testsrc2=size=1920x1080:rate=60 -f lavfi -i sine=frequency=440 \
+  -t 10 -c:v libx264 -crf 12 -c:a aac -ac 2 -shortest "/out/Product Demo.mov"
+```
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/inbox":/out --entrypoint ffmpeg \
+  linuxserver/ffmpeg:9.0-cli-ls81 -hide_banner -loglevel error \
+  -f lavfi -i mandelbrot=size=1080x1920:rate=30 -t 10 -c:v libx264 -crf 12 /out/background-loop.mp4
+```
+
+```bash
+./optimize.sh
+```
+
+Real output from that run on an 8-CPU Docker VM (4 minutes in total, most of it
+VMAF scoring). The `background-loop` job's per-CRF lines are shortened:
+
+```
+== Preflight ==
+  ✓ ffmpeg: docker (docker:a8097f20436f)
+  • Waiting 8s for files added to inbox/ in the last 10s to settle…
+  ✓ Queued Product Demo.mov as job 'product-demo'
+  ✓ Queued background-loop.mp4 as job 'background-loop'
+
+== background-loop ==
+  • Source: 69.59 MB | 1080x1920 @ 30 fps | 10 s | audio: none
+  • Output: 1080x1920 @ source fps | audio: none | preset slow
+  ✓ CRF 34 -> 2.23 MB (-96.8%), VMAF 61.46 (below 90) [encoded]
+  ✓ CRF 32 -> 3.49 MB (-95.0%), VMAF 68.37 (below 90) [encoded]
+    … CRF 30, 28 and 26 also score below 90 …
+  ✓ CRF 24 -> 14.54 MB (-79.1%), VMAF 88.58 (below 90) [encoded]
+  ✓ CRF 22 -> 18.50 MB (-73.4%), VMAF 91.68 [encoded]
+  ✓ Delivered output/background-loop/background-loop.mp4 — 18.50 MB (-73.4%), CRF 22, VMAF 91.68
+
+== product-demo ==
+  • Source: 30.46 MB | 1920x1080 @ 60 fps | 10 s | audio: aac
+  • Output: 1920x1080 @ 30 fps | audio: aac-128k | preset slow
+  • Encoding CRF 34…
+  • Measuring VMAF for CRF 34 (roughly real-time)…
+  ✓ CRF 34 -> 1.78 MB (-94.2%), VMAF 84.41 (below 90) [encoded]
+  • Encoding CRF 32…
+  • Measuring VMAF for CRF 32 (roughly real-time)…
+  ✓ CRF 32 -> 2.21 MB (-92.8%), VMAF 87.64 (below 90) [encoded]
+  • Encoding CRF 30…
+  • Measuring VMAF for CRF 30 (roughly real-time)…
+  ✓ CRF 30 -> 2.76 MB (-90.9%), VMAF 90.34 [encoded]
+  ✓ Delivered output/product-demo/product-demo.mp4 — 2.76 MB (-90.9%), CRF 30, VMAF 90.34
+
+== Summary ==
+  JOB                                 SOURCE      OUTPUT   SAVED  CRF   VMAF  STATUS
+  background-loop                   69.59 MB    18.50 MB   73.4%   22  91.68  output/background-loop/
+  product-demo                      30.46 MB     2.76 MB   90.9%   30  90.34  output/product-demo/
+```
+
+What the run shows:
+
+- **Search depth follows the content.** The test pattern reached the quality
+  target at CRF 30 on the third try. The detailed fractal needed seven tries,
+  down to CRF 22. One fixed CRF for both would either waste bytes on the easy
+  clip or visibly damage the hard one.
+- **Defaults adapt to the source.** The 60 fps clip was capped at 30 fps and its
+  audio re-encoded to AAC. The portrait clip kept its orientation and full size,
+  since 1920 px is within the cap.
+- **Re-runs are cheap.** Running `./optimize.sh` again reports nothing to do.
+  Editing `work/product-demo/job.env` (for example `FPS=24` and `AUDIO=strip`)
+  re-processes only that job.
+
+Each job also writes a `report.txt`:
+
+```
+##### Run 2026-09-14 19:03:55 #####
+Source:  Product Demo.mov | 30.46 MB | 1920x1080 @ 60 fps | 10 s | yuv420p | audio: aac
+Output:  1920x1080 @ 30 fps | audio: aac-128k | x264 preset slow | docker:a8097f20436f
+job.env: no overrides
+Quality: auto, VMAF >= 90, trying CRF 34 32 30 28 26 24 22 20
+  CRF 34: 1.78 MB (-94.2%), VMAF 84.41 (below 90) [encoded]
+  CRF 32: 2.21 MB (-92.8%), VMAF 87.64 (below 90) [encoded]
+  CRF 30: 2.76 MB (-90.9%), VMAF 90.34 [encoded]
+Chosen:  CRF 30, VMAF 90.34 | 2.76 MB (-90.9% vs source, 2210 kb/s)
+Output:  output/product-demo/product-demo.mp4, product-demo-poster.jpg, product-demo-poster.webp
+```
+
+Generated clips are an extreme case: they start at very high bitrates and
+contain no camera noise. Savings on real footage depend on how the source was
+exported. A master-quality export typically shrinks by 90% or more, while a file
+already compressed for the web shrinks much less.
+
 ## Commands
 
 | Command | Does |
