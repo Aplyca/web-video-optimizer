@@ -15,6 +15,8 @@ and a report.
   visible quality.
 - **Docker only.** Nothing to install except Docker. ffmpeg, x264, VMAF and
   downloads all run inside a pinned container.
+- **See the difference.** Every finished video gets a comparison page that plays
+  the original and any encode under a draggable divider, next to the results.
 - **One folder per video.** The source, settings, report, encode attempts,
   preview frames and finished files for a video all live in `videos/<name>/`.
 - **Any input.** Landscape, portrait or square; rotated phone clips; odd sizes;
@@ -68,6 +70,10 @@ first run. See [Docker details](#docker-details).
    | `<name>.mp4` | H.264 High / yuv420p / AAC, `+faststart`, metadata stripped |
    | `<name>-poster.jpg`, `.webp` | Poster frame for `<video poster="…">` |
    | `report.txt` | Source details, the settings applied, every CRF tried with size and VMAF, the choice |
+
+5. Check the result yourself by opening `videos/<name>/compare.html` in a browser
+   (`open videos/<name>/compare.html` on macOS). See
+   [Comparison page](#comparison-page).
 
 **In Claude Code**, the bundled `optimize-video` skill loads automatically for
 requests like the one above. **With other agents**, start with: "Read AGENTS.md,
@@ -148,6 +154,7 @@ videos/
     source.mov               the original, moved out of inbox/
     job.env                  settings for this video
     report.txt               history of every run
+    compare.html             comparison page: original vs any encode, with results
     output/                  the deliverables
       launch-video.mp4
       launch-video-poster.jpg
@@ -161,6 +168,27 @@ failed/                      rejected files, each with a reason
 
 To archive, share or delete a video, move, zip or delete its folder. The folders
 marked scratch can be removed at any time with `./optimize.sh --clean`.
+
+### Comparison page
+
+Each delivered video gets `videos/<name>/compare.html`. Open it in any browser,
+straight from disk: no server, and nothing is uploaded, since it only plays the
+files in that folder.
+
+- **Compare any two versions.** The original and the delivered encode are shown
+  by default. Either side can switch to any encode the CRF search tried, so you
+  can see where quality starts to break down. The two sides play in sync.
+- **Inspect closely.** Drag the divider, step frame by frame (`←` `→`), slow down
+  to ¼ speed, zoom up to 4× (hold `Shift` over the video to aim), or go full
+  screen.
+- **The results next to the picture.** Size and bitrate before and after, CRF,
+  VMAF against the target, and every version's size, saving and score. It also
+  shows the settings for this video with the reason written for each, the
+  encoder details, warnings from the run, and the poster.
+
+The page is rebuilt on every delivery. `./optimize.sh --compare NAME|all`
+rebuilds it, for example after `--clean` removed the other encodes, or for videos
+delivered before the page existed.
 
 ### Working with many videos
 
@@ -226,6 +254,7 @@ settings by hand.
 | `./optimize.sh --redo NAME\|all` | Re-process videos (matching encodes are reused) |
 | `./optimize.sh --inspect FILE\|NAME` | Show source details and the output plan, no encoding |
 | `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames for review; for a finished video, source and output frames at the same timestamps |
+| `./optimize.sh --compare NAME\|all` | Rebuild `videos/NAME/compare.html`, the side-by-side comparison page |
 | `./optimize.sh --collect DIR` | Copy every finished MP4 and its posters into `DIR` |
 | `./optimize.sh --clean NAME\|all` | Delete encode attempts and preview frames; keep sources, settings, reports and outputs |
 
@@ -362,7 +391,8 @@ flowchart TD
     pass -- "no, none left" --> best["Use best tried<br/>+ warning"]
     best --> deliver
 
-    deliver["videos/#lt;name#gt;/output/<br/>MP4 · posters · report.txt"] --> done(["Video done"])
+    deliver["videos/#lt;name#gt;/output/<br/>MP4 · posters · report.txt"] --> compare["videos/#lt;name#gt;/compare.html<br/>original vs encodes, with results"]
+    compare --> done(["Video done"])
     done -. "job.env edited<br/>or --redo" .-> probe
 ```
 
@@ -396,6 +426,8 @@ the result and edits `job.env` if something needs fixing.
 4. **Deliver.** The chosen encode is copied to `videos/<name>/output/`, posters
    are taken from it (so they match what plays), and the run is appended to the
    video's `report.txt`.
+5. **Compare.** `videos/<name>/compare.html` is written with the run's results
+   and every version still on disk, ready to open in a browser.
 
 ### Caching and re-runs
 
@@ -541,6 +573,7 @@ lib/config.sh      settings layers, parsing and validation
 lib/media.sh       Docker ffmpeg calls, probing, output plan, encode, VMAF, posters
 lib/jobs.sh        inbox ingest, per-video folders, reports, watch, list, frames,
                    collect, clean
+lib/compare.sh     the comparison page (compare.html) and --compare
 inbox/             drop videos (and .env sidecars) here
 videos/  failed/   created at runtime (git-ignored)
 ```

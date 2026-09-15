@@ -5,7 +5,8 @@
 # Drop videos into inbox/ and run ./optimize.sh (or leave ./optimize.sh --watch
 # running), or ask an AI coding agent to do it (see AGENTS.md). Each video gets
 # one folder, videos/<name>/, holding its source, settings, report, candidate
-# encodes, previews and the web-ready output. Quality is chosen with VMAF.
+# encodes, previews, a comparison page and the web-ready output. Quality is
+# chosen with VMAF.
 # Requires only bash and Docker: all video work runs in a pinned container.
 # See README.md for the workflow and every setting.
 
@@ -23,6 +24,8 @@ cd "$ROOT_DIR"
 . lib/media.sh
 # shellcheck source=lib/jobs.sh
 . lib/jobs.sh
+# shellcheck source=lib/compare.sh
+. lib/compare.sh
 
 usage() {
   cat <<'EOF'
@@ -36,12 +39,14 @@ Usage:
   ./optimize.sh --frames FILE|NAME [COUNT]
                                    Save sample frames for visual review
                                    (source vs output for a delivered video)
+  ./optimize.sh --compare NAME|all Rebuild videos/NAME/compare.html, the page that plays
+                                   the original and any encode side by side
   ./optimize.sh --collect DIR      Copy every finished MP4 and its posters into DIR
   ./optimize.sh --clean NAME|all   Delete candidate encodes and previews (keeps outputs)
   ./optimize.sh --help
 
-Each video lives in videos/NAME/: source, job.env, report.txt, output/, preview/,
-candidates/.
+Each video lives in videos/NAME/: source, job.env, report.txt, compare.html,
+output/, preview/, candidates/.
 Settings: config.env (all videos) < videos/NAME/job.env (one video) < environment
   e.g.  VMAF=off ./optimize.sh      CRF_FINAL=24 ./optimize.sh --redo intro
 EOF
@@ -64,12 +69,13 @@ main() {
     --frames)
       MODE=frames; shift
       { [ $# -ge 1 ] && [ $# -le 2 ]; } || die "--frames needs a file or video name, and optionally a frame count" ;;
+    --compare) MODE=compare; shift; [ $# -gt 0 ] || die "--compare needs a video name or 'all'" ;;
     --collect) MODE=collect; shift; [ $# -eq 1 ] || die "--collect needs exactly one destination folder" ;;
     --clean) MODE=clean; shift; [ $# -gt 0 ] || die "--clean needs a video name or 'all'" ;;
     -*) usage >&2; die "Unknown option: $1" ;;
   esac
   case "$MODE" in
-    run|redo|inspect|frames|collect|clean) ;;
+    run|redo|inspect|frames|compare|collect|clean) ;;
     *) [ $# -eq 0 ] || die "Unexpected arguments: $*" ;;
   esac
 
@@ -92,6 +98,8 @@ main() {
       for arg in "$@"; do inspect "$arg"; done ;;
     frames)
       frames "$@" ;;
+    compare)
+      compare_jobs "$@" ;;
     run)
       lock_acquire
       for arg in "$@"; do add_to_inbox "$arg"; done

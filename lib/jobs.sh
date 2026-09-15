@@ -4,7 +4,9 @@
 #   source.<ext>   the original (moved out of inbox/)
 #   job.env        per-video settings (template written on first run)
 #   report.txt     history of every run
-#   output/        <name>.mp4, <name>-poster.jpg/.webp, report.txt (latest run)
+#   compare.html   plays the original and any encode side by side, with the
+#                  results (lib/compare.sh; rebuilt on every delivery)
+#   output/       <name>.mp4, <name>-poster.jpg/.webp, report.txt (latest run)
 #   preview/       frames sampled with --frames (scratch)
 #   candidates/    crfNN.mp4 encodes + .settings/.vmaf cache sidecars (scratch)
 #   .job .done .error   bookkeeping
@@ -388,6 +390,12 @@ process_job() {
   if [ "$warnings" -gt 0 ]; then
     warn "Delivered with warnings; check the source and $od/report.txt"
   fi
+  # A page problem never fails a delivered video; --compare can rebuild it
+  if write_compare_page "$name"; then
+    ok "Comparison page: $d/compare.html"
+  else
+    warn "Could not write $d/compare.html (retry with ./optimize.sh --compare $name)"
+  fi
 }
 
 run_job() {
@@ -522,6 +530,7 @@ clean_jobs() {
     fi
   done
   ok "Removed candidate encodes and previews, freed $(human_size $((kb * 1024))). Outputs, sources and reports are kept."
+  info "Comparison pages still compare the original and the delivered file; run ./optimize.sh --compare to drop removed encodes from them."
 }
 
 list_jobs() {

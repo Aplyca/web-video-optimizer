@@ -87,6 +87,11 @@ or start it. Don't work around it.
    - blocking right after cuts or in fast motion
    - lost texture
 
+   The run also writes `videos/<name>/compare.html`. It plays the original and
+   any encode under a draggable divider, with the results, settings and reasons.
+   It's for the person to check motion and detail themselves; it doesn't replace
+   your frame check.
+
 8. **Adjust if needed** by editing `videos/<name>/job.env`, the sidecar merged into
    the job, then run `./optimize.sh` again. The edited job is re-processed and
    matching encodes are reused. Usually the fix is a higher `VMAF_TARGET` or a
@@ -98,6 +103,9 @@ or start it. Don't work around it.
    - the chosen CRF and VMAF score
    - any warnings or doubts
    - where the files are: `videos/<name>/output/`
+   - the comparison page, `videos/<name>/compare.html`, to open in a browser
+     (`open videos/<name>/compare.html` on macOS). It's rebuilt on every run;
+     `./optimize.sh --compare <name>` rebuilds it without re-processing.
 
    For a batch, offer `./optimize.sh --collect <folder>`, which copies every
    finished MP4 and its posters into one folder. Once the person is happy with
@@ -184,13 +192,16 @@ of silently lowering `VMAF_TARGET`.
   preview frames sends those images to your model provider as part of the
   conversation. If the person says the footage is confidential, don't view
   frames: ask them to describe the content instead, and skip the visual check.
+  `compare.html` plays the local files next to it: don't upload or publish it,
+  or the videos, anywhere.
 - **Don't hide trade-offs.** Anything that lowers quality (`VMAF_TARGET` below
   90, `MAX_BITRATE`, a smaller `MAX_DIMENSION` than the person implied) must
   be mentioned in your report.
 - **Previews and candidates are scratch.** `videos/_previews/`, and
   `videos/<name>/preview/` and `candidates/`, are safe to remove with
   `./optimize.sh --clean`. Never delete `source.*` or `output/` unless the person
-  asks.
+  asks. After a clean, the comparison page can only compare the original and the
+  delivered file.
 
 ## Example sidecar
 

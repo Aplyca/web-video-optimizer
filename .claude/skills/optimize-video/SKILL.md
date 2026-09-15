@@ -37,5 +37,9 @@ Claude Code specifics:
 - **Several videos:** inspect and sample each one, and write every sidecar first.
   Then run `./optimize.sh` once, which processes them all. Afterwards, offer
   `./optimize.sh --collect <folder>` to gather the finished files in one place.
+- **Comparison page:** every delivery writes `videos/<name>/compare.html`. Give
+  the user its path in the report and offer to open it (`open
+  videos/<name>/compare.html` on macOS). It plays local files, so never publish
+  it as an Artifact or upload it. Keep verifying with the frame pairs yourself.
 - **Finish** with the report described in AGENTS.md: settings and reasons,
-  size before → after, CRF, VMAF, and any concerns.
+  size before → after, CRF, VMAF, the comparison page, and any concerns.
