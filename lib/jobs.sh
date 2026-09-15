@@ -54,6 +54,7 @@ reject() {  # reject <path> <reason> — park an unusable inbox file or job in f
   dest="failed/$(basename "$1")"
   [ ! -e "$dest" ] || dest="failed/$(date +%Y%m%d-%H%M%S)-$(basename "$1")"
   mv "$1" "$dest"
+  if [ -f "$1.env" ]; then mv "$1.env" "$dest.env"; fi  # keep a rejected video's settings with it
   if [ -d "$dest" ]; then
     printf '%s\n' "$2" > "$dest/reason.txt"
   else
@@ -83,6 +84,11 @@ add_to_inbox() {
       [ "$(cd "$(dirname "$arg")" && pwd)" != "$ROOT_DIR/inbox" ] || return 0
       dest="inbox/$(basename "$arg")"
       [ ! -e "$dest" ] || dest="inbox/$(date +%Y%m%d-%H%M%S)-$(basename "$arg")"
+      if [ -f "$arg.env" ]; then  # settings sidecar next to the file travels with it
+        cp "$arg.env" "$dest.env"
+        ADDED_FILES="$ADDED_FILES"$'\n'"$dest.env"$'\n'
+        ok "Added settings $(basename "$arg").env"
+      fi
       cp "$arg" "$dest"
       ;;
   esac
@@ -90,9 +96,23 @@ add_to_inbox() {
   ok "Added $(basename "$dest") to inbox/"
 }
 
+inbox_age() {  # inbox_age <video> — seconds since it or its .env sidecar changed
+  local a="" b      # (empty when both were copied in by this run, so known complete)
+  case "$ADDED_FILES" in *$'\n'"$1"$'\n'*) ;; *) a="$(file_age "$1")" ;; esac
+  if [ -f "$1.env" ]; then
+    case "$ADDED_FILES" in
+      *$'\n'"$1.env"$'\n'*) ;;
+      *) b="$(file_age "$1.env")"
+         if [ -z "$a" ] || [ "$b" -lt "$a" ]; then a="$b"; fi ;;
+    esac
+  fi
+  printf '%s' "$a"
+}
+
 # ingest_inbox [wait] — moves settled inbox files into new jobs.
 # A file must be unchanged (size and mtime) for INBOX_SETTLE seconds, so a copy
 # that is still running, or has stalled, is not processed half-written.
+# <video>.env next to a video is its settings sidecar and becomes the job's job.env.
 # wait: sleep until fresh files have settled (one-shot runs); without it, fresh
 # files are simply left for a later pass (watch mode).
 ingest_inbox() {
@@ -100,11 +120,18 @@ ingest_inbox() {
   files=(); sizes=(); youngest=""
   for f in inbox/*; do
     [ -f "$f" ] || continue
+    case "$f" in *.env) continue ;; esac
     files+=("$f"); sizes+=("$(file_bytes "$f")")
-    case "$ADDED_FILES" in *$'\n'"$f"$'\n'*) continue ;; esac
-    age="$(file_age "$f")"
-    if [ -z "$youngest" ] || [ "$age" -lt "$youngest" ]; then youngest="$age"; fi
+    age="$(inbox_age "$f")"
+    if [ -n "$age" ] && { [ -z "$youngest" ] || [ "$age" -lt "$youngest" ]; }; then youngest="$age"; fi
   done
+  if [ "${1:-}" = wait ]; then
+    for f in inbox/*.env; do
+      if [ -f "$f" ] && [ ! -f "${f%.env}" ]; then
+        warn "inbox/$(basename "$f") has no matching video (expected inbox/$(basename "${f%.env}")). If that video was already queued, put the settings in its work/<job>/job.env"
+      fi
+    done
+  fi
   [ "${#files[@]}" -gt 0 ] || return 0
 
   pause=2
@@ -125,15 +152,11 @@ ingest_inbox() {
       info "$(basename "$f") is still being copied, will retry"
       continue
     fi
-    case "$ADDED_FILES" in
-      *$'\n'"$f"$'\n'*) ;;
-      *)
-        age="$(file_age "$f")"
-        if [ "$age" -lt "$INBOX_SETTLE" ]; then
-          info "$(basename "$f") changed ${age}s ago, will pick it up once it settles"
-          continue
-        fi ;;
-    esac
+    age="$(inbox_age "$f")"
+    if [ -n "$age" ] && [ "$age" -lt "$INBOX_SETTLE" ]; then
+      info "$(basename "$f")$( [ ! -f "$f.env" ] || printf ' (or its .env)') changed ${age}s ago, will pick it up once it settles"
+      continue
+    fi
     if [ "${sizes[$i]}" = 0 ]; then reject "$f" "empty file"; continue; fi
     if ! in_words "$ext" "$VIDEO_EXTS"; then reject "$f" "unsupported file type '.$ext'"; continue; fi
 
@@ -141,7 +164,14 @@ ingest_inbox() {
     mkdir -p "work/$name"
     mv "$f" "work/$name/source.$ext"
     printf 'original_name=%s\nqueued=%s\n' "$(basename "$f")" "$(date '+%Y-%m-%d %H:%M:%S')" > "work/$name/.job"
-    ok "Queued $(basename "$f") as job '$name'"
+    if [ -f "$f.env" ]; then
+      { echo "# Settings from inbox/$(basename "$f").env"; cat "$f.env"; } > "work/$name/job.env"
+      rm -f "$f.env"
+      printf 'sidecar=%s\n' "$(basename "$f").env" >> "work/$name/.job"
+      ok "Queued $(basename "$f") as job '$name' with settings from $(basename "$f").env"
+    else
+      ok "Queued $(basename "$f") as job '$name'"
+    fi
   done
 }
 
@@ -191,7 +221,7 @@ rlog() { printf '%s\n' "$*" >> "$REPORT_RUN"; }
 
 # Runs inside a subshell with `set -e` (see run_job); any failure aborts the job only.
 process_job() {
-  local name="$1" d="work/$1" src overrides crf_list mode crf pct kbps chosen="" score="" lowest="" lowest_score="" od warnings=0
+  local name="$1" d="work/$1" src overrides key sidecar crf_list mode crf pct kbps chosen="" score="" lowest="" lowest_score="" od warnings=0
   src="$(job_source "$d")" || die "No source file in $d"
   REPORT_RUN="$d/.report.run"
   : > "$REPORT_RUN"
@@ -207,15 +237,29 @@ process_job() {
     exit 2
   fi
   plan_output
-  [ -f "$d/job.env" ] || write_job_env "$d" "$name"
-  overrides="$(trim "$(sed -n 's/^[[:space:]]*\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "$d/job.env" | tr '\n' ' ')")"
+  if [ ! -f "$d/job.env" ]; then
+    write_job_env "$d" "$name"
+  elif ! grep -q '^# Per-video settings for job' "$d/job.env"; then
+    # Seeded from an inbox sidecar: add the documented template above those settings
+    mv "$d/job.env" "$d/.job.env.seed"
+    write_job_env "$d" "$name"
+    { echo; echo "# --- Active settings from the inbox sidecar (these override config.env) ---"; cat "$d/.job.env.seed"; } >> "$d/job.env"
+    rm -f "$d/.job.env.seed"
+  fi
+  sidecar="$(kv_get "$d/.job" sidecar)"
+  overrides=""  # settings job.env actually applies (ignored keys and repeats left out)
+  for key in $(sed -n 's/^[[:space:]]*\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "$d/job.env"); do
+    if in_words "$key" "$CONFIG_KEYS" && ! in_words "$key" "$GLOBAL_ONLY_KEYS" && ! in_words "$key" "$overrides"; then
+      overrides="${overrides:+$overrides }$key"
+    fi
+  done
 
   info "Source: $(human_size "$SRC_BYTES") | ${DISP_W}x${DISP_H} @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | audio: ${SRC_AUDIO:-none}"
   info "Output: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | preset $X264_PRESET"
   rlog "##### Run $(date '+%Y-%m-%d %H:%M:%S') #####"
   rlog "Source:  $(kv_get "$d/.job" original_name) | $(human_size "$SRC_BYTES") | ${SRC_W}x${SRC_H}$( [ "$SRC_ROT" = 0 ] || printf ' rotated %s°' "$SRC_ROT") @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | ${SRC_PIXFMT} | audio: ${SRC_AUDIO:-none}"
   rlog "Output:  ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | x264 preset $X264_PRESET | $FFMPEG_ID"
-  rlog "job.env: ${overrides:-no overrides}"
+  rlog "job.env: ${overrides:-no overrides}${sidecar:+ (seeded from inbox/$sidecar)}"
 
   case "$SRC_TRANSFER" in
     smpte2084|arib-std-b67)
@@ -416,8 +460,16 @@ list_jobs() {
     fi
   done
   [ "$n" -gt 0 ] || echo "  (no jobs yet)"
-  n=0; for f in inbox/*; do [ -f "$f" ] && n=$((n + 1)); done
-  echo "  inbox/: $n file(s) waiting"
+  n=0; for f in inbox/*; do case "$f" in *.env) ;; *) [ -f "$f" ] && n=$((n + 1)) ;; esac; done
+  echo "  inbox/: $n video(s) waiting"
+  for f in inbox/*.env; do
+    [ -f "$f" ] || continue
+    if [ -f "${f%.env}" ]; then
+      echo "    $(basename "$f"): settings for $(basename "${f%.env}")"
+    else
+      echo "    $(basename "$f"): no matching video (orphaned settings)"
+    fi
+  done
   n=0; for f in failed/*; do case "$f" in *.reason.txt) ;; *) [ -e "$f" ] && n=$((n + 1)) ;; esac; done
   echo "  failed/: $n rejected item(s)"
 }
@@ -431,7 +483,12 @@ inspect() {
     config_resolve "work/$arg/job.env"
   else
     [ -f "$arg" ] || die "Not a file or job name: $arg"
-    config_resolve ""
+    if [ -f "$arg.env" ]; then
+      info "Applying settings sidecar $(basename "$arg").env"
+      config_resolve "$arg.env"
+    else
+      config_resolve ""
+    fi
     host_path="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
     path="$host_path"
     case "$path" in

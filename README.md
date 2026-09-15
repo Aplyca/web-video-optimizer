@@ -155,7 +155,7 @@ flowchart TD
     wait -.-> settle
     settle -- yes --> kind{"Supported,<br/>non-empty video?"}
     kind -- no --> failed[["failed/<br/>file + reason"]]
-    kind -- yes --> job["work/#lt;name#gt;/<br/>source + job.env template"]
+    kind -- yes --> job["work/#lt;name#gt;/<br/>source + job.env<br/>(template + inbox .env sidecar)"]
     job --> probe{"ffprobe finds<br/>a video stream?"}
     probe -- no --> failed
     probe -- yes --> plan["Plan output<br/>size cap · fps cap · rotation · audio"]
@@ -181,7 +181,7 @@ Folder contents along the way:
 
 | Folder | Holds |
 |---|---|
-| `inbox/` | Videos waiting to be picked up |
+| `inbox/` | Videos waiting to be picked up, optionally with `<video>.env` settings sidecars |
 | `work/<name>/` | `source.<ext>`, `job.env`, `candidates/crfNN.mp4` with cache sidecars, `report.txt` history |
 | `output/<name>/` | `<name>.mp4`, `<name>-poster.jpg`/`.webp`, `report.txt` for the latest run |
 | `failed/` | Rejected files, each with a reason |
@@ -193,7 +193,10 @@ Folder contents along the way:
    progress isn't processed half-written. For transfers that may stall longer,
    copy under a temporary name such as `video.mp4.part` and rename it when done;
    `.part`, `.crdownload`, `.download` and `.tmp` files are always skipped.
-   Non-video, empty and unreadable files go to `failed/` with a `.reason.txt`.
+   A `<video>.env` sidecar next to the file becomes the job's settings; drop it
+   first or together with the video, since a sidecar that arrives after its
+   video was picked up is reported as orphaned. Non-video, empty and unreadable
+   files go to `failed/` with a `.reason.txt`.
    If ffmpeg reports read errors (a truncated or corrupt source), the job is
    still delivered but flagged with warnings in the summary and report.
 2. **Plan.** ffprobe reads the source and the output is planned from the
@@ -243,8 +246,14 @@ Settings come from four layers; later layers win:
 
 1. Built-in defaults (`lib/config.sh`)
 2. `config.env`, for every video in this project
-3. `work/<name>/job.env`, for one video (uncomment lines in the generated template)
-4. Environment variables, for one run: `VMAF=off ./optimize.sh`
+3. Per-video settings, which end up in `work/<name>/job.env`. Set them either:
+   - before processing, by dropping a sidecar named after the video plus `.env`
+     next to it in `inbox/` (`clip.mov` → `clip.mov.env`), or
+   - afterwards, by uncommenting lines in the generated `job.env`, which
+     re-processes the job on the next run
+4. Environment variables, for one run: `VMAF=off ./optimize.sh`. These override
+   `job.env` for every job processed in that run, so pair them with
+   `--redo <name>` to target one video.
 
 The config files are parsed as `KEY=VALUE`, never executed.
 
@@ -269,13 +278,22 @@ The config files are parsed as `KEY=VALUE`, never executed.
 
 ### Common recipes
 
-**Muted autoplay background or hero video.** Put this in its `job.env`, or in
-`config.env` if every video in the project is one:
+**Muted autoplay background or hero video.** Drop the settings next to the video
+before it's processed, so the first encode already uses them:
 
+```bash
+printf 'AUDIO=strip\nFPS=24\n' > inbox/background.mp4.env
 ```
-AUDIO=strip
-FPS=24
+
+```bash
+cp ~/Downloads/background.mp4 inbox/
 ```
+
+The same lines work in an existing job's `work/<name>/job.env`, or in
+`config.env` if every video in the project is a background loop. When you pass a
+file as an argument (`./optimize.sh ~/clips/background.mp4`), a
+`background.mp4.env` next to it is copied along with it. `--inspect` on an inbox
+file also applies its sidecar, so you can preview the plan first.
 
 **Re-process one video with a fixed CRF:**
 
