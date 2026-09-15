@@ -565,6 +565,8 @@ VMAF=off X264_PRESET=medium ./optimize.sh
 
 ```
 AGENTS.md          guide for AI agents: procedure, decision guide, rules
+CLAUDE.md          Claude Code project memory: imports AGENTS.md, plus notes
+                   for changing the tool
 .claude/skills/    Claude Code skill (optimize-video) that follows AGENTS.md
 optimize.sh        entry point and command-line options
 config.env         project-wide defaults
