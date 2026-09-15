@@ -2,9 +2,9 @@
 #   built-in defaults < config.env < work/<job>/job.env < environment variables
 # Config files are parsed as KEY=VALUE (never executed); unknown keys are ignored.
 
-CONFIG_KEYS="CRF_FINAL CRFS CRF_FALLBACK VMAF VMAF_TARGET MAX_DIMENSION FPS MAX_FPS AUDIO AUDIO_BITRATE AUDIO_CHANNELS X264_PRESET X264_TUNE MAX_BITRATE POSTER_TIME FFMPEG_RUNNER FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
-# These pick the toolchain or drive the inbox, so they can't vary per job
-GLOBAL_ONLY_KEYS="FFMPEG_RUNNER FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
+CONFIG_KEYS="CRF_FINAL CRFS CRF_FALLBACK VMAF VMAF_TARGET MAX_DIMENSION FPS MAX_FPS AUDIO AUDIO_BITRATE AUDIO_CHANNELS X264_PRESET X264_TUNE MAX_BITRATE POSTER_TIME FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
+# These pick the Docker image or drive the inbox, so they can't vary per job
+GLOBAL_ONLY_KEYS="FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
 
 config_defaults() {  # keep in sync with config.env
   CRF_FINAL=auto
@@ -22,7 +22,6 @@ config_defaults() {  # keep in sync with config.env
   X264_TUNE=none
   MAX_BITRATE=none
   POSTER_TIME=1
-  FFMPEG_RUNNER=auto
   FFMPEG_IMAGE=linuxserver/ffmpeg:9.0-cli-ls81
   WATCH_INTERVAL=10
   INBOX_SETTLE=10
@@ -113,7 +112,6 @@ config_validate() {
     { is_int "$c" && [ "$c" -gt 0 ]; } || die "MAX_BITRATE must be 'none' or like 3000k / 3M (got '$MAX_BITRATE')"
   fi
   is_number "$POSTER_TIME" || die "POSTER_TIME must be seconds (got '$POSTER_TIME')"
-  in_words "$FFMPEG_RUNNER" "auto docker native" || die "FFMPEG_RUNNER must be auto, docker or native (got '$FFMPEG_RUNNER')"
   { is_int "$WATCH_INTERVAL" && [ "$WATCH_INTERVAL" -ge 1 ]; } || die "WATCH_INTERVAL must be whole seconds >= 1 (got '$WATCH_INTERVAL')"
   is_int "$INBOX_SETTLE" || die "INBOX_SETTLE must be whole seconds (got '$INBOX_SETTLE')"
 }

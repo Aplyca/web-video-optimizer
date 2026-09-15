@@ -73,8 +73,16 @@ add_to_inbox() {
       [ -n "$name" ] || name="download.mp4"
       case "$name" in *.*) ;; *) name="$name.mp4" ;; esac
       info "Downloading $arg"
-      # Hidden while downloading so a concurrent watcher ignores it
-      curl -fL "${CURL_PROGRESS[@]}" -o "inbox/.$name.part" "$arg" || die "Download failed: $arg"
+      # curl runs inside the Docker image like everything else. Hidden while
+      # downloading so a concurrent watcher ignores it
+      if ! ff curl -fL "${CURL_PROGRESS[@]}" -o "inbox/.$name.part" "$arg"; then
+        rm -f "inbox/.$name.part"
+        case "$arg" in
+          *://localhost*|*://127.0.0.1*)
+            die "Download failed: $arg — downloads run inside Docker, where localhost is the container; use host.docker.internal instead" ;;
+          *) die "Download failed: $arg" ;;
+        esac
+      fi
       dest="inbox/$name"
       [ ! -e "$dest" ] || dest="inbox/$(date +%Y%m%d-%H%M%S)-$name"
       mv "inbox/.$name.part" "$dest"
@@ -505,7 +513,7 @@ resolve_input() {
   IN_PATH="$IN_HOST"
   case "$IN_PATH" in
     "$ROOT_DIR"/*) IN_PATH="${IN_PATH#"$ROOT_DIR"/}" ;;
-    *) if [ "$RUNNER" = docker ]; then FF_MOUNT_DIR="$(dirname "$IN_PATH")"; IN_PATH="/in/$(basename "$IN_PATH")"; fi ;;
+    *) FF_MOUNT_DIR="$(dirname "$IN_PATH")"; IN_PATH="/in/$(basename "$IN_PATH")" ;;  # mounted read-only
   esac
 }
 

@@ -24,6 +24,11 @@ visible quality, **unless** you lower `VMAF_TARGET` or cap `MAX_BITRATE`.
 Run everything from the repository root. `<video>` is a path such as
 `inbox/clip.mov`; `<name>` is the job name the script derives (`clip`).
 
+All video work goes through `./optimize.sh`, which runs ffmpeg, ffprobe, VMAF
+and downloads inside Docker. Docker is the only requirement. If `./optimize.sh`
+reports that Docker is missing or not running, stop and ask the person to install
+or start it. Don't work around it.
+
 1. **Inspect** the source:
 
    ```bash
@@ -152,6 +157,10 @@ of silently lowering `VMAF_TARGET`.
 - **Write only settings files:** `inbox/<video>.env` before processing, or
   `work/<name>/job.env` after. Don't edit `config.env`, `lib/` or
   `optimize.sh` to optimize one video, unless asked to.
+- **Install nothing.** Don't install ffmpeg, codecs, Python packages, Homebrew
+  formulas or anything else, and don't run ffmpeg or ffprobe directly on the
+  host. Use `./optimize.sh --inspect` and `--frames` for everything you need to
+  see.
 - **Use only per-video keys:** `CRF_FINAL`, `CRFS`, `CRF_FALLBACK`, `VMAF`,
   `VMAF_TARGET`, `MAX_DIMENSION`, `FPS`, `MAX_FPS`, `AUDIO`, `AUDIO_BITRATE`,
   `AUDIO_CHANNELS`, `X264_PRESET`, `X264_TUNE`, `MAX_BITRATE`, `POSTER_TIME`.
@@ -164,7 +173,10 @@ of silently lowering `VMAF_TARGET`.
 - **Prefer the quality gate over forcing a CRF.** Set `CRF_FINAL` only when the
   person asks for a specific CRF.
 - **Keep footage local.** Videos and preview frames can be private or client
-  material. Never upload them or send them to external services.
+  material. Never upload them or send them to external services. Viewing
+  preview frames sends those images to your model provider as part of the
+  conversation. If the person says the footage is confidential, don't view
+  frames: ask them to describe the content instead, and skip the visual check.
 - **Don't hide trade-offs.** Anything that lowers quality (`VMAF_TARGET` below
   90, `MAX_BITRATE`, a smaller `MAX_DIMENSION` than the person implied) must
   be mentioned in your report.

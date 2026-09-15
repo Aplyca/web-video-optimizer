@@ -1,38 +1,187 @@
-# Video Optimization
+# Web Video Optimizer
 
-Drop a video in a folder, get back a web-ready MP4 that is as small as possible
-without visible quality loss, plus poster images and a report.
+Ask your AI coding agent to optimize a video. It looks at the footage, works out
+how the video will be used, chooses the settings, and returns a web-ready MP4
+that is as small as possible without visible quality loss, plus poster images
+and a report.
 
-- **Portable:** plain bash (3.2+, so stock macOS works) plus either Docker or a
-  local ffmpeg with libx264 and libvmaf. Copy the folder anywhere and run it.
-- **Generic:** any container ffmpeg reads, landscape, portrait, square, rotated
-  phone clips, odd sizes, high frame rates, with or without audio.
-- **Quality-gated:** the encode level (CRF) is picked automatically by measuring
-  each attempt with [VMAF](https://github.com/Netflix/vmaf), Netflix's perceptual
-  quality score, instead of guessing.
+- **Agent-driven.** The agent decides what a script can't know: whether the audio
+  matters, what kind of picture it is, where it will play, which frame makes a
+  good poster. [`AGENTS.md`](AGENTS.md) guides any coding agent, and a Claude Code
+  skill is included.
+- **Quality-gated.** Every encode is measured with
+  [VMAF](https://github.com/Netflix/vmaf), Netflix's perceptual quality score. The
+  smallest file that meets the target wins, so a poor setting costs bytes, not
+  visible quality.
+- **Docker only.** Nothing to install except Docker. ffmpeg, x264, VMAF and
+  downloads all run inside a pinned container.
+- **Any input.** Landscape, portrait or square; rotated phone clips; odd sizes;
+  high frame rates; with or without audio.
 
-## Quick start
+## Requirements
+
+| You need | Notes |
+|---|---|
+| **Docker**, running | [Docker Desktop](https://docs.docker.com/get-docker/) on macOS and Windows, Docker Engine on Linux. **This is the only thing you install.** |
+| A bash shell | Already on macOS and Linux. On Windows, run from WSL2 with Docker Desktop's WSL integration turned on. |
+| An AI coding agent | Recommended, not required: [Claude Code](https://claude.com/claude-code), Codex, Cursor or any agent that can run commands and view images. |
+
+You do **not** need ffmpeg, Homebrew packages, Python, Node or any codec
+libraries. On your machine the script only moves files and keeps records with
+built-in shell tools. Every video operation runs in the
+`linuxserver/ffmpeg:9.0-cli-ls81` image, which is pulled automatically on the
+first run. See [Docker details](#docker-details).
+
+## Quick start with an AI agent
+
+1. Get the project and start Docker:
+
+   ```bash
+   git clone https://github.com/Aplyca/web-video-optimizer.git
+   ```
+
+   ```bash
+   cd web-video-optimizer
+   ```
+
+2. Open your agent in that folder and ask, saying **where the video will play**
+   and **whether its audio matters**:
+
+   > Optimize ~/Downloads/launch.mov. It's the muted background video on our
+   > pricing page.
+
+3. The agent follows [`AGENTS.md`](AGENTS.md):
+   1. It inspects the video and looks at sampled frames.
+   2. It asks you about anything it can't tell, such as whether a voice-over
+      matters.
+   3. It writes a small settings file with a reason for every choice.
+   4. It runs the optimizer.
+   5. It compares source and output frames, and adjusts if something looks off.
+   6. It reports back.
+
+4. Pick up the results in `output/<name>/`:
+
+   | File | What it is |
+   |---|---|
+   | `<name>.mp4` | H.264 High / yuv420p / AAC, `+faststart`, metadata stripped |
+   | `<name>-poster.jpg`, `.webp` | Poster frame for `<video poster="…">` |
+   | `report.txt` | Source details, the settings applied, every CRF tried with size and VMAF, the choice |
+
+**In Claude Code**, the bundled `optimize-video` skill loads automatically for
+requests like the one above. **With other agents**, start with: "Read AGENTS.md,
+then optimize …".
+
+### What to tell the agent
+
+The more the agent knows about how the video will be used, the better its choices:
+
+- **Where it plays:** a full-screen background, a small embed in an article, a
+  social post, a product page on mobile.
+- **Audio:** muted autoplay, a voice-over that must stay clear, or music.
+- **Budgets:** for example "must stay under 5 MB".
+- **Several videos at once:** "Optimize everything in ~/exports/. They're
+  tutorial clips with narration."
+
+### Example
+
+A real run, using a generated 1440p60 test clip (flat color fields, hard edges, a
+small timecode readout, 5.1 audio) as the video:
+
+> Optimize inbox/big.mp4. It's a short product demo shown as a small embed on a
+> docs page, and the voice-over matters.
+
+After inspecting the video and viewing its frames, the agent wrote
+`inbox/big.mp4.env`:
+
+```
+# Small embed on a docs page (well under 800 px wide): 1080p would be wasted pixels
+MAX_DIMENSION=1280
+# Flat color fields, hard edges and fine checkerboard: synthetic, not camera footage
+X264_TUNE=animation
+# Small timecode text in the top-left corner must stay legible; VMAF under-weights text
+VMAF_TARGET=94
+# Voice-over matters, but speech doesn't need the source's 5.1 or stereo
+AUDIO_CHANNELS=mono
+AUDIO_BITRATE=96k
+```
+
+Then it ran the optimizer:
+
+```
+== big ==
+  • Source: 5.64 MB | 2560x1440 @ 60 fps | 2 s | audio: aac
+  • Output: 1280x720 @ 30 fps | audio: aac-96k-mono | preset slow | tune=animation
+  ✓ CRF 34 -> 90.04 KB (-98.4%), VMAF 87.64 (below 94) [encoded]
+  ✓ CRF 32 -> 104.41 KB (-98.1%), VMAF 90.69 (below 94) [encoded]
+  ✓ CRF 30 -> 127.29 KB (-97.7%), VMAF 92.72 (below 94) [encoded]
+  ✓ CRF 28 -> 169.48 KB (-97.0%), VMAF 93.96 (below 94) [encoded]
+  ✓ CRF 26 -> 221.66 KB (-96.1%), VMAF 94.94 [encoded]
+  ✓ Delivered output/big/big.mp4 — 221.66 KB (-96.1%), CRF 26, VMAF 94.94
+```
+
+The higher quality target made the search go four steps further than the default
+90 would have: CRF 26 instead of 32. That kept the small text crisp. Comparing
+source and output frames afterwards, the timecode and checkerboard were intact,
+and only a thin gradient line had softened slightly.
+
+### Privacy
+
+The agent views sampled frames (`--frames` writes JPEGs to `preview/`). With a
+cloud-hosted model, those images are sent to the model provider as part of the
+conversation, under your agent's data terms. The videos themselves are never
+uploaded: all processing is local, in Docker.
+
+For confidential footage, tell the agent not to view frames and describe the
+content yourself, or use the tool without an agent.
+
+## Using it without an agent
+
+Everything the agent does is available directly. Drop videos in `inbox/` and run
+the optimizer:
 
 ```bash
 cp ~/Downloads/my-video.mov inbox/
+```
+
+```bash
 ./optimize.sh
 ```
 
-Results land in `output/my-video/`:
-
-| File | What it is |
-|---|---|
-| `my-video.mp4` | H.264 High / yuv420p / AAC, `+faststart`, metadata stripped |
-| `my-video-poster.jpg`, `.webp` | Poster frame for `<video poster="…">` |
-| `report.txt` | Source details, every CRF tried with size and VMAF, the choice |
-
-Or leave a watcher running and just drop files into `inbox/`:
+Or leave a watcher running and drop files into `inbox/` whenever:
 
 ```bash
 ./optimize.sh --watch
 ```
 
-## Demo
+Defaults suit general web video. To give one video its own settings, write the
+same kind of sidecar the agent writes, **before** the video is picked up:
+
+```bash
+printf 'AUDIO=strip\nFPS=24\n' > inbox/background.mp4.env
+```
+
+```bash
+cp ~/Downloads/background.mp4 inbox/
+```
+
+The decision guide in [`AGENTS.md`](AGENTS.md) is just as useful for choosing
+settings by hand.
+
+### Commands
+
+| Command | Does |
+|---|---|
+| `./optimize.sh` | Process every video in `inbox/`, plus unfinished jobs |
+| `./optimize.sh FILE\|URL …` | Copy or download into `inbox/`, then process |
+| `./optimize.sh --watch [SECONDS]` | Keep processing whatever lands in `inbox/` |
+| `./optimize.sh --list` | Show jobs and their status |
+| `./optimize.sh --redo NAME\|all` | Re-process jobs (matching encodes are reused) |
+| `./optimize.sh --inspect FILE\|NAME` | Show source details and the output plan, no encoding |
+| `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames to `preview/<name>/`; for a delivered job, source and output frames at the same timestamps |
+
+The exit code is non-zero when any job failed or a file was rejected.
+
+### Demo with generated clips
 
 You can try it without your own footage. These commands use the same Docker
 image to generate two 10-second clips in `inbox/`, both exported at very high
@@ -60,8 +209,9 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/inbox":/out --entrypoint ffm
 ./optimize.sh
 ```
 
-Real output from that run on an 8-CPU Docker VM (4 minutes in total, most of it
-VMAF scoring). The `background-loop` job's per-CRF lines are shortened:
+Real output from that run with default settings, on an 8-CPU Docker VM
+(4 minutes in total, most of it VMAF scoring). The `background-loop` job's
+per-CRF lines are shortened:
 
 ```
 == Preflight ==
@@ -133,20 +283,6 @@ contain no camera noise. Savings on real footage depend on how the source was
 exported. A master-quality export typically shrinks by 90% or more, while a file
 already compressed for the web shrinks much less.
 
-## Commands
-
-| Command | Does |
-|---|---|
-| `./optimize.sh` | Process every video in `inbox/`, plus unfinished jobs |
-| `./optimize.sh FILE\|URL …` | Copy or download into `inbox/`, then process |
-| `./optimize.sh --watch [SECONDS]` | Keep processing whatever lands in `inbox/` |
-| `./optimize.sh --list` | Show jobs and their status |
-| `./optimize.sh --redo NAME\|all` | Re-process jobs (matching encodes are reused) |
-| `./optimize.sh --inspect FILE\|NAME` | Show source details and the output plan, no encoding |
-| `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames to `preview/<name>/`; for a delivered job, source and output frames at the same timestamps |
-
-The exit code is non-zero when any job failed or a file was rejected.
-
 ## How it works
 
 ```mermaid
@@ -178,6 +314,10 @@ flowchart TD
     done -. "job.env edited<br/>or --redo" .-> probe
 ```
 
+The agent's part happens before this flow starts. It writes the `inbox/<video>.env`
+sidecar that becomes the job's settings. Afterwards it uses `--frames` to check the
+result and edits `job.env` if something needs fixing.
+
 Folder contents along the way:
 
 | Folder | Holds |
@@ -185,6 +325,7 @@ Folder contents along the way:
 | `inbox/` | Videos waiting to be picked up, optionally with `<video>.env` settings sidecars |
 | `work/<name>/` | `source.<ext>`, `job.env`, `candidates/crfNN.mp4` with cache sidecars, `report.txt` history |
 | `output/<name>/` | `<name>.mp4`, `<name>-poster.jpg`/`.webp`, `report.txt` for the latest run |
+| `preview/<name>/` | Sampled frames from `--frames`, for the agent (or you) to review |
 | `failed/` | Rejected files, each with a reason |
 
 1. **Ingest.** Each file in `inbox/` is moved into its own job folder,
@@ -217,10 +358,10 @@ Folder contents along the way:
 ### Caching and re-runs
 
 Every candidate has a `.settings` sidecar recording everything that affects its
-bytes: CRF, output size, frame rate, preset, audio plan and the exact ffmpeg
-build. VMAF scores are cached the same way. A re-run reuses a candidate only when
-its sidecar matches, so changing a setting never serves a stale file, and
-re-running with unchanged settings costs seconds.
+bytes: CRF, output size, frame rate, preset, tune, bitrate cap, audio plan and the
+exact Docker image. VMAF scores are cached the same way. A re-run reuses a
+candidate only when its sidecar matches, so changing a setting never serves a
+stale file, and re-running with unchanged settings costs seconds.
 
 A job counts as finished once `work/<name>/.done` exists. It is processed again
 when its `job.env` is edited or when you run `--redo`. A job that failed is
@@ -241,17 +382,21 @@ and was killed for running out of memory on a 1080p source with 8 GB for Docker.
 
 Scoring takes roughly the video's duration per candidate.
 
+VMAF under-weights small-text sharpness and color banding. That's why the agent
+raises `VMAF_TARGET` for text-heavy or gradient-heavy content, and why it checks
+frames visually as well.
+
 ## Settings
 
 Settings come from four layers; later layers win:
 
 1. Built-in defaults (`lib/config.sh`)
 2. `config.env`, for every video in this project
-3. Per-video settings, which end up in `work/<name>/job.env`. Set them either:
-   - before processing, by dropping a sidecar named after the video plus `.env`
-     next to it in `inbox/` (`clip.mov` → `clip.mov.env`), or
+3. Per-video settings, which end up in `work/<name>/job.env`. They're set either:
+   - before processing, by a sidecar named after the video plus `.env` next to it
+     in `inbox/` (`clip.mov` → `clip.mov.env`). This is what the agent writes.
    - afterwards, by uncommenting lines in the generated `job.env`, which
-     re-processes the job on the next run
+     re-processes the job on the next run.
 4. Environment variables, for one run: `VMAF=off ./optimize.sh`. These override
    `job.env` for every job processed in that run, so pair them with
    `--redo <name>` to target one video.
@@ -268,36 +413,34 @@ The config files are parsed as `KEY=VALUE`, never executed.
 | `MAX_DIMENSION` | `1920` | Longest side in pixels |
 | `FPS` | `auto` | `auto` caps at `MAX_FPS`; `keep` never changes it; a number caps to it |
 | `MAX_FPS` | `30` | Cap used by `FPS=auto` |
-| `AUDIO` | `keep` | `keep` re-encodes to AAC (surround downmixed to stereo); `strip` removes it |
+| `AUDIO` | `keep` | `keep` re-encodes to AAC; `strip` removes it |
 | `AUDIO_BITRATE` | `128k` | AAC bitrate |
 | `AUDIO_CHANNELS` | `auto` | `auto` downmixes surround only; `mono` for speech; `stereo` always two channels |
 | `X264_PRESET` | `slow` | Slower presets give smaller files at the same quality |
 | `X264_TUNE` | `none` | `film`, `animation`, `grain` or `stillimage` to tune x264 for the content |
-| `MAX_BITRATE` | `none` | Peak video bitrate cap such as `900k` or `3M`, for strict size budgets |
+| `MAX_BITRATE` | `none` | Video bitrate cap such as `900k` or `3M`, for strict size budgets |
 | `POSTER_TIME` | `1` | Poster frame time in seconds (clamped to half the duration) |
-| `FFMPEG_RUNNER` | `auto` | `auto`, `docker` or `native` (config.env or environment only) |
-| `FFMPEG_IMAGE` | `linuxserver/ffmpeg:9.0-cli-ls81` | Docker image, pinned for reproducibility |
-| `WATCH_INTERVAL` | `10` | Seconds between inbox checks in `--watch` mode |
-| `INBOX_SETTLE` | `10` | Seconds a file must be unchanged before it is picked up |
+| `FFMPEG_IMAGE` | `linuxserver/ffmpeg:9.0-cli-ls81` | Docker image all video work runs in (config.env or environment only) |
+| `WATCH_INTERVAL` | `10` | Seconds between inbox checks in `--watch` mode (config.env or environment only) |
+| `INBOX_SETTLE` | `10` | Seconds a file must be unchanged before it is picked up (config.env or environment only) |
+
+[`AGENTS.md`](AGENTS.md) maps intended uses and content types to these settings.
 
 ### Common recipes
 
-**Muted autoplay background or hero video.** Drop the settings next to the video
-before it's processed, so the first encode already uses them:
+**Muted autoplay background or hero video:**
 
-```bash
-printf 'AUDIO=strip\nFPS=24\n' > inbox/background.mp4.env
+```
+AUDIO=strip
+FPS=24
 ```
 
-```bash
-cp ~/Downloads/background.mp4 inbox/
-```
-
-The same lines work in an existing job's `work/<name>/job.env`, or in
-`config.env` if every video in the project is a background loop. When you pass a
-file as an argument (`./optimize.sh ~/clips/background.mp4`), a
-`background.mp4.env` next to it is copied along with it. `--inspect` on an inbox
-file also applies its sidecar, so you can preview the plan first.
+Put these lines in `inbox/<video>.env` before the video is processed, in an existing
+job's `work/<name>/job.env`, or in `config.env` if every video in the project is a
+background loop. When you pass a file as an argument
+(`./optimize.sh ~/clips/background.mp4`), a `background.mp4.env` next to it is
+copied along with it. `--inspect` on an inbox file also applies its sidecar, so
+you can preview the plan first.
 
 **Re-process one video with a fixed CRF:**
 
@@ -311,45 +454,24 @@ CRF_FINAL=24 ./optimize.sh --redo my-video
 VMAF=off X264_PRESET=medium ./optimize.sh
 ```
 
-## Letting an AI agent choose the settings
+## Docker details
 
-The script measures what it can: resolution, frame rate and quality through
-VMAF. It can't know what a video is for, or what's in it. Is the audio a
-voice-over or never heard? Is it camera footage, motion graphics or a screen
-recording with small text? Where will it play? Those answers decide settings like
-`AUDIO`, `X264_TUNE`, `VMAF_TARGET` and `POSTER_TIME`.
-
-An AI coding agent can supply them. [`AGENTS.md`](AGENTS.md) gives any agent the
-workflow:
-
-1. Inspect the video.
-2. Look at sampled frames (`--frames`).
-3. Establish the intended use, asking you when it's unclear.
-4. Write the `.env` sidecar with a reason for each setting.
-5. Run the optimizer.
-6. Compare source and output frames, and adjust if needed.
-
-It also includes a decision guide that maps uses and content types to settings,
-and rules. Two rules matter most: agents only write settings files, and footage
-never leaves the machine.
-
-With [Claude Code](https://claude.com/claude-code), the repository includes an
-`optimize-video` skill, so a request like this is enough:
-
-> Optimize inbox/launch-video.mov. It's the muted background on our pricing page.
-
-Settings written this way go through the same validation as hand-written ones,
-and every encode still has to pass the VMAF check.
-
-## Requirements
-
-- bash 3.2+ with standard tools (`awk`, `sed`, `stat`, `curl` for URLs)
-- **Either** Docker (Desktop on macOS/Windows; on Linux files are written as your
-  user) **or** ffmpeg + ffprobe on `PATH`, built with `libx264` and `libvmaf`
-  (only libx264 is needed when `VMAF=off`)
-
-With `FFMPEG_RUNNER=auto`, a suitable native ffmpeg is used when present, and
-Docker otherwise. The first Docker run pulls the image.
+- **What runs where.** On your machine, bash only moves files, reads settings and
+  writes reports. Every `ffmpeg`, `ffprobe` and download (`curl`) call is a
+  short-lived `docker run --rm` of the pinned image. The project folder is mounted
+  at `/work`, and for a file outside the project, its folder is mounted read-only
+  at `/in`. There's no long-running container or compose file.
+- **Files stay yours.** Containers run with your user and group IDs, so outputs
+  aren't owned by root on Linux.
+- **Reproducible.** The image is pinned (`FFMPEG_IMAGE`), and its image ID is part
+  of every cache key. Switching images re-encodes instead of mixing results.
+- **Resources.** Encoding uses all CPUs Docker is allowed. VMAF scoring stays
+  around 400 MB of memory even for 1080p, so Docker Desktop's default limits are
+  enough.
+- **Downloads.** `./optimize.sh URL` downloads inside the container. For a server
+  on your own machine, use `host.docker.internal` instead of `localhost`.
+- **Uninstalling.** Delete the project folder, then remove the image with
+  `docker image rm linuxserver/ffmpeg:9.0-cli-ls81`. Nothing else was installed.
 
 ## Limitations
 
@@ -364,14 +486,22 @@ Docker otherwise. The first Docker run pulls the image.
 ## Project layout
 
 ```
+AGENTS.md          guide for AI agents: procedure, decision guide, rules
+.claude/skills/    Claude Code skill (optimize-video) that follows AGENTS.md
 optimize.sh        entry point and command-line options
 config.env         project-wide defaults
-AGENTS.md          guide for AI agents choosing per-video settings
-.claude/skills/    Claude Code skill (optimize-video) that follows AGENTS.md
 lib/util.sh        logging and portable helpers
 lib/config.sh      settings layers, parsing and validation
-lib/media.sh       ffmpeg runner, probing, output plan, encode, VMAF, posters
-lib/jobs.sh        inbox ingest, job lifecycle, reports, watch, list
-inbox/             drop videos here
+lib/media.sh       Docker ffmpeg calls, probing, output plan, encode, VMAF, posters
+lib/jobs.sh        inbox ingest, job lifecycle, reports, watch, list, frames
+inbox/             drop videos (and .env sidecars) here
 work/  output/  failed/  preview/   created at runtime (git-ignored)
+```
+
+## Contributing
+
+Linting also runs in Docker, so there's nothing to install. CI runs the same check:
+
+```bash
+docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable -x -s bash -S warning optimize.sh
 ```

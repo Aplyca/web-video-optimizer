@@ -1,18 +1,16 @@
-# lib/media.sh — ffmpeg runner (native or Docker), probing, output planning,
-# encoding, VMAF scoring and posters. All paths are relative to the project root.
+# lib/media.sh — ffmpeg in Docker, probing, output planning, encoding, VMAF
+# scoring and posters. All paths are relative to the project root.
+#
+# Every ffmpeg/ffprobe call runs inside the pinned FFMPEG_IMAGE container:
+# nothing video-related is installed or run on the host.
 
-RUNNER=""        # native | docker
-FFMPEG_ID=""     # identifies the exact ffmpeg build; part of every cache key
+FFMPEG_ID=""     # identifies the exact image; part of every cache key
 HAS_LIBVMAF=0
-FF_MOUNT_DIR=""  # extra host dir exposed read-only at /in (Docker), for --inspect
+FF_MOUNT_DIR=""  # extra host dir exposed read-only at /in, for files outside the project
 
-ff() {  # ff <ffmpeg|ffprobe> <args...>
+ff() {  # ff <ffmpeg|ffprobe|curl> <args...> — runs the tool inside FFMPEG_IMAGE
   local tool="$1" extra
   shift
-  if [ "$RUNNER" = native ]; then
-    "$tool" "$@"
-    return
-  fi
   extra=()
   [ -z "$FF_MOUNT_DIR" ] || extra=(-v "$FF_MOUNT_DIR":/in:ro)
   docker run --rm --user "$(id -u):$(id -g)" \
@@ -20,57 +18,31 @@ ff() {  # ff <ffmpeg|ffprobe> <args...>
     --entrypoint "$tool" "$FFMPEG_IMAGE" "$@"
 }
 
+# runner_init — checks Docker, pulls the pinned image on first use and verifies
+# it has libx264 and libvmaf. Docker is the only host requirement.
 runner_init() {
-  local have_native=0 caps v
-  if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-    have_native=1
+  local caps
+  command -v docker >/dev/null 2>&1 \
+    || die "Docker is required and is the only thing to install: https://docs.docker.com/get-docker/ (ffmpeg, x264 and VMAF run inside a container)"
+  docker info >/dev/null 2>&1 \
+    || die "Docker is installed but not running. Start Docker Desktop (or the Docker daemon) and re-run."
+  if ! docker image inspect "$FFMPEG_IMAGE" >/dev/null 2>&1; then
+    info "Pulling $FFMPEG_IMAGE (first run only)…"
+    docker pull -q "$FFMPEG_IMAGE" >/dev/null || die "Could not pull $FFMPEG_IMAGE"
   fi
-
-  case "$FFMPEG_RUNNER" in
-    native)
-      [ "$have_native" = 1 ] || die "FFMPEG_RUNNER=native but ffmpeg/ffprobe are not on PATH"
-      RUNNER=native ;;
-    docker)
-      RUNNER=docker ;;
-    auto)
-      RUNNER=docker
-      if [ "$have_native" = 1 ]; then
-        caps="$(ffmpeg -hide_banner -encoders 2>/dev/null; ffmpeg -hide_banner -filters 2>/dev/null)" || caps=""
-        case "$caps" in
-          *libx264*)
-            case "$VMAF" in off) RUNNER=native ;; esac
-            case "$caps" in *libvmaf*) RUNNER=native ;; esac ;;
-        esac
-      fi ;;
-  esac
-
-  if [ "$RUNNER" = docker ]; then
-    command -v docker >/dev/null 2>&1 \
-      || die "No usable ffmpeg. Install Docker (https://docs.docker.com/get-docker/) or an ffmpeg build with libx264 + libvmaf."
-    docker info >/dev/null 2>&1 \
-      || die "Docker is installed but not running. Start it and re-run."
-    if ! docker image inspect "$FFMPEG_IMAGE" >/dev/null 2>&1; then
-      info "Pulling $FFMPEG_IMAGE (first run only)…"
-      docker pull -q "$FFMPEG_IMAGE" >/dev/null || die "Could not pull $FFMPEG_IMAGE"
-    fi
-    FFMPEG_ID="$(docker image inspect -f '{{.Id}}' "$FFMPEG_IMAGE")"
-    FFMPEG_ID="${FFMPEG_ID#sha256:}"
-    FFMPEG_ID="docker:${FFMPEG_ID:0:12}"
-  else
-    v="$(ffmpeg -version 2>/dev/null)" || v=""
-    set -- ${v%%$'\n'*}
-    FFMPEG_ID="native:${3:-unknown}"
-  fi
+  FFMPEG_ID="$(docker image inspect -f '{{.Id}}' "$FFMPEG_IMAGE")"
+  FFMPEG_ID="${FFMPEG_ID#sha256:}"
+  FFMPEG_ID="docker:${FFMPEG_ID:0:12}"
 
   # Capture before matching: piping into `grep -q` SIGPIPEs ffmpeg under pipefail
   caps="$(ff ffmpeg -hide_banner -encoders 2>/dev/null; ff ffmpeg -hide_banner -filters 2>/dev/null)" || caps=""
-  case "$caps" in *libx264*) ;; *) die "The $RUNNER ffmpeg has no libx264 encoder" ;; esac
+  case "$caps" in *libx264*) ;; *) die "$FFMPEG_IMAGE has no libx264 encoder" ;; esac
   case "$caps" in *libvmaf*) HAS_LIBVMAF=1 ;; *) HAS_LIBVMAF=0 ;; esac
 
   if [ "$HAS_LIBVMAF" = 1 ]; then
-    ok "ffmpeg: $RUNNER ($FFMPEG_ID)"
+    ok "ffmpeg: docker ($FFMPEG_ID)"
   else
-    ok "ffmpeg: $RUNNER ($FFMPEG_ID, no libvmaf — VMAF=on jobs will fail)"
+    ok "ffmpeg: docker ($FFMPEG_ID, no libvmaf — VMAF=on jobs will fail)"
   fi
 }
 
@@ -240,7 +212,7 @@ candidate_vmaf() {
     CAND_SCORE="$(sed -n 2p "$CAND.vmaf")"
     return 0
   fi
-  [ "$HAS_LIBVMAF" = 1 ] || die "VMAF=on but this ffmpeg has no libvmaf (set VMAF=off or use the Docker runner)"
+  [ "$HAS_LIBVMAF" = 1 ] || die "VMAF=on but $FFMPEG_IMAGE has no libvmaf (set VMAF=off or use an image with libvmaf)"
 
   info "Measuring VMAF for CRF $2 (roughly real-time)…"
   log="$(ff ffmpeg -hide_banner -nostats -i "$CAND" -i "$1" \

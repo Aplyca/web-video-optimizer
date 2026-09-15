@@ -11,6 +11,13 @@ before starting.
 
 Claude Code specifics:
 
+- **Docker only, install nothing:** run every video operation through
+  `./optimize.sh`, which uses Docker. Never install ffmpeg or other tools, and
+  don't run ffmpeg or ffprobe directly. If Docker is missing or not running, stop
+  and ask the user to start it.
+- **Confidential footage:** if the user says the footage is confidential, don't
+  Read the preview frames, since that sends them to the model. Ask the user to
+  describe the content instead.
 - **Viewing frames:** use the Read tool on the JPEGs that `./optimize.sh --frames`
   writes to `preview/<name>/`. Look at every sampled frame before choosing
   settings. When verifying, compare each `NN-source` / `NN-output` pair.
