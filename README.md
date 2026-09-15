@@ -148,14 +148,43 @@ The exit code is non-zero when any job failed or a file was rejected.
 
 ## How it works
 
+```mermaid
+flowchart TD
+    drop(["Video dropped in inbox/"]) --> settle{"Unchanged for<br/>INBOX_SETTLE seconds?"}
+    settle -- "no: still copying" --> wait["Wait for the next pass"]
+    wait -.-> settle
+    settle -- yes --> kind{"Supported,<br/>non-empty video?"}
+    kind -- no --> failed[["failed/<br/>file + reason"]]
+    kind -- yes --> job["work/#lt;name#gt;/<br/>source + job.env template"]
+    job --> probe{"ffprobe finds<br/>a video stream?"}
+    probe -- no --> failed
+    probe -- yes --> plan["Plan output<br/>size cap · fps cap · rotation · audio"]
+    plan --> mode{"CRF_FINAL"}
+
+    mode -- "a number,<br/>or auto with VMAF=off" --> single["Encode that CRF<br/>(scored if VMAF=on)"]
+    single --> deliver
+
+    mode -- "auto with VMAF=on" --> next["Take next CRF from CRFS<br/>highest = smallest file first"]
+    next --> encode["Encode candidate<br/>reused if .settings match"]
+    encode --> score["VMAF vs source through the same filters<br/>reused if .vmaf matches"]
+    score --> pass{"VMAF ≥<br/>VMAF_TARGET?"}
+    pass -- yes --> deliver
+    pass -- "no, CRFs left" --> next
+    pass -- "no, none left" --> best["Use best tried<br/>+ warning"]
+    best --> deliver
+
+    deliver["output/#lt;name#gt;/<br/>MP4 · posters · report.txt"] --> done(["Job done"])
+    done -. "job.env edited<br/>or --redo" .-> probe
 ```
-inbox/ ──ingest──▶ work/<name>/ ──encode + VMAF──▶ output/<name>/
-   │                  source.<ext>                   <name>.mp4
-   │                  job.env                        <name>-poster.jpg/.webp
-   │                  candidates/crfNN.mp4           report.txt
-   │                  report.txt (history)
-   └──unusable──▶ failed/ (+ reason)
-```
+
+Folder contents along the way:
+
+| Folder | Holds |
+|---|---|
+| `inbox/` | Videos waiting to be picked up |
+| `work/<name>/` | `source.<ext>`, `job.env`, `candidates/crfNN.mp4` with cache sidecars, `report.txt` history |
+| `output/<name>/` | `<name>.mp4`, `<name>-poster.jpg`/`.webp`, `report.txt` for the latest run |
+| `failed/` | Rejected files, each with a reason |
 
 1. **Ingest.** Each file in `inbox/` is moved into its own job folder,
    `work/<name>/`, where `<name>` is a slug of the filename (`My Clip.MOV` →
