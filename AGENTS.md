@@ -45,8 +45,8 @@ or start it. Don't work around it.
    ./optimize.sh --frames inbox/clip.mov
    ```
 
-   This writes 6 evenly spaced JPEGs to `preview/clip/` (pass a count after the
-   file for more). Open and look at them. Identify the content type, text and
+   This writes 6 evenly spaced JPEGs to `videos/_previews/clip/` (pass a count
+   after the file for more). Open and look at them. Identify the content type, text and
    UI elements, dark scenes and gradients, grain or noise, and fades or black
    frames.
 
@@ -73,8 +73,9 @@ or start it. Don't work around it.
    ./optimize.sh
    ```
 
-7. **Verify** the result. Read `output/<name>/report.txt`, then compare source
-   and output frames at the same timestamps:
+7. **Verify** the result. Everything for a video lives in `videos/<name>/`. Read
+   `videos/<name>/report.txt`, then compare source and output frames at the same
+   timestamps. They're written to `videos/<name>/preview/`:
 
    ```bash
    ./optimize.sh --frames clip
@@ -86,7 +87,7 @@ or start it. Don't work around it.
    - blocking right after cuts or in fast motion
    - lost texture
 
-8. **Adjust if needed** by editing `work/<name>/job.env`, the sidecar merged into
+8. **Adjust if needed** by editing `videos/<name>/job.env`, the sidecar merged into
    the job, then run `./optimize.sh` again. The edited job is re-processed and
    matching encodes are reused. Usually the fix is a higher `VMAF_TARGET` or a
    lower `CRFS` range. Stop after two adjustment rounds and report what you saw.
@@ -96,6 +97,12 @@ or start it. Don't work around it.
    - source size → output size
    - the chosen CRF and VMAF score
    - any warnings or doubts
+   - where the files are: `videos/<name>/output/`
+
+   For a batch, offer `./optimize.sh --collect <folder>`, which copies every
+   finished MP4 and its posters into one folder. Once the person is happy with
+   the results, offer `./optimize.sh --clean all`, which frees the space used by
+   candidate encodes and previews and keeps the outputs.
 
 ## Decision guide
 
@@ -155,7 +162,7 @@ of silently lowering `VMAF_TARGET`.
 ## Rules
 
 - **Write only settings files:** `inbox/<video>.env` before processing, or
-  `work/<name>/job.env` after. Don't edit `config.env`, `lib/` or
+  `videos/<name>/job.env` after. Don't edit `config.env`, `lib/` or
   `optimize.sh` to optimize one video, unless asked to.
 - **Install nothing.** Don't install ffmpeg, codecs, Python packages, Homebrew
   formulas or anything else, and don't run ffmpeg or ffprobe directly on the
@@ -165,7 +172,7 @@ of silently lowering `VMAF_TARGET`.
   `VMAF_TARGET`, `MAX_DIMENSION`, `FPS`, `MAX_FPS`, `AUDIO`, `AUDIO_BITRATE`,
   `AUDIO_CHANNELS`, `X264_PRESET`, `X264_TUNE`, `MAX_BITRATE`, `POSTER_TIME`.
   Toolchain keys are ignored in per-video files.
-- **Write the sidecar before the video can be picked up.** If `work/.lock`
+- **Write the sidecar before the video can be picked up.** If `videos/.lock`
   exists, a watcher (`--watch`) may be running. In that case, write the sidecar
   into `inbox/` first and copy the video in afterwards. Or keep the video outside
   `inbox/`, write `<video>.env` next to it, and run `./optimize.sh <path>`, which
@@ -180,7 +187,10 @@ of silently lowering `VMAF_TARGET`.
 - **Don't hide trade-offs.** Anything that lowers quality (`VMAF_TARGET` below
   90, `MAX_BITRATE`, a smaller `MAX_DIMENSION` than the person implied) must
   be mentioned in your report.
-- **`preview/` is scratch.** It is git-ignored and safe to delete.
+- **Previews and candidates are scratch.** `videos/_previews/`, and
+  `videos/<name>/preview/` and `candidates/`, are safe to remove with
+  `./optimize.sh --clean`. Never delete `source.*` or `output/` unless the person
+  asks.
 
 ## Example sidecar
 

@@ -15,6 +15,8 @@ and a report.
   visible quality.
 - **Docker only.** Nothing to install except Docker. ffmpeg, x264, VMAF and
   downloads all run inside a pinned container.
+- **One folder per video.** The source, settings, report, encode attempts,
+  preview frames and finished files for a video all live in `videos/<name>/`.
 - **Any input.** Landscape, portrait or square; rotated phone clips; odd sizes;
   high frame rates; with or without audio.
 
@@ -59,7 +61,7 @@ first run. See [Docker details](#docker-details).
    5. It compares source and output frames, and adjusts if something looks off.
    6. It reports back.
 
-4. Pick up the results in `output/<name>/`:
+4. Pick up the results in `videos/<name>/output/`:
 
    | File | What it is |
    |---|---|
@@ -80,7 +82,7 @@ The more the agent knows about how the video will be used, the better its choice
 - **Audio:** muted autoplay, a voice-over that must stay clear, or music.
 - **Budgets:** for example "must stay under 5 MB".
 - **Several videos at once:** "Optimize everything in ~/exports/. They're
-  tutorial clips with narration."
+  tutorial clips with narration. Put the finished files in ~/exports/web/."
 
 ### Example
 
@@ -116,7 +118,7 @@ Then it ran the optimizer:
   ✓ CRF 30 -> 127.29 KB (-97.7%), VMAF 92.72 (below 94) [encoded]
   ✓ CRF 28 -> 169.48 KB (-97.0%), VMAF 93.96 (below 94) [encoded]
   ✓ CRF 26 -> 221.66 KB (-96.1%), VMAF 94.94 [encoded]
-  ✓ Delivered output/big/big.mp4 — 221.66 KB (-96.1%), CRF 26, VMAF 94.94
+  ✓ Delivered videos/big/output/big.mp4 — 221.66 KB (-96.1%), CRF 26, VMAF 94.94
 ```
 
 The higher quality target made the search go four steps further than the default
@@ -126,13 +128,59 @@ and only a thin gradient line had softened slightly.
 
 ### Privacy
 
-The agent views sampled frames (`--frames` writes JPEGs to `preview/`). With a
-cloud-hosted model, those images are sent to the model provider as part of the
-conversation, under your agent's data terms. The videos themselves are never
-uploaded: all processing is local, in Docker.
+The agent views sampled frames (`--frames` writes JPEGs into the video's
+`preview/` folder). With a cloud-hosted model, those images are sent to the model
+provider as part of the conversation, under your agent's data terms. The videos
+themselves are never uploaded: all processing is local, in Docker.
 
 For confidential footage, tell the agent not to view frames and describe the
 content yourself, or use the tool without an agent.
+
+## Where everything goes
+
+Each video gets one folder, named after the file (`Launch Video.MOV` →
+`videos/launch-video/`):
+
+```
+inbox/                       drop videos here (optionally with <video>.env settings)
+videos/
+  launch-video/
+    source.mov               the original, moved out of inbox/
+    job.env                  settings for this video
+    report.txt               history of every run
+    output/                  the deliverables
+      launch-video.mp4
+      launch-video-poster.jpg
+      launch-video-poster.webp
+      report.txt             the latest run
+    preview/                 frames sampled for review (scratch)
+    candidates/              encode attempts and cache files (scratch)
+  _previews/                 frames sampled from files not processed yet (scratch)
+failed/                      rejected files, each with a reason
+```
+
+To archive, share or delete a video, move, zip or delete its folder. The folders
+marked scratch can be removed at any time with `./optimize.sh --clean`.
+
+### Working with many videos
+
+- **One run handles a batch.** `./optimize.sh` picks up every video in `inbox/`,
+  processes them one after another, and ends with a summary table. A bad file is
+  rejected or marked failed without stopping the others.
+- **Per-video settings stay separate.** Each video's `.env` sidecar or `job.env`
+  applies only to that video.
+- **`./optimize.sh --list`** shows every video's status, size, CRF and VMAF.
+- **`./optimize.sh --collect ~/Desktop/web`** copies every finished MP4 and its
+  posters into one flat folder, ready to upload.
+- **`./optimize.sh --clean all`** deletes the encode attempts and preview frames
+  once you're happy with the results. They can add up to several times the size
+  of the finished files. Sources, settings, reports and outputs are kept, and a
+  later re-run simply encodes again.
+- **Repeated filenames don't collide.** A second `clip.mov` becomes
+  `videos/clip-2/`, and each report records the original filename.
+
+Videos are encoded one at a time, and only one run can use a project folder at
+once. To keep separate projects apart, clone the repository once per project.
 
 ## Using it without an agent
 
@@ -171,15 +219,19 @@ settings by hand.
 
 | Command | Does |
 |---|---|
-| `./optimize.sh` | Process every video in `inbox/`, plus unfinished jobs |
+| `./optimize.sh` | Process every video in `inbox/`, plus unfinished ones |
 | `./optimize.sh FILE\|URL …` | Copy or download into `inbox/`, then process |
 | `./optimize.sh --watch [SECONDS]` | Keep processing whatever lands in `inbox/` |
-| `./optimize.sh --list` | Show jobs and their status |
-| `./optimize.sh --redo NAME\|all` | Re-process jobs (matching encodes are reused) |
+| `./optimize.sh --list` | Show videos and their status |
+| `./optimize.sh --redo NAME\|all` | Re-process videos (matching encodes are reused) |
 | `./optimize.sh --inspect FILE\|NAME` | Show source details and the output plan, no encoding |
-| `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames to `preview/<name>/`; for a delivered job, source and output frames at the same timestamps |
+| `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames for review; for a finished video, source and output frames at the same timestamps |
+| `./optimize.sh --collect DIR` | Copy every finished MP4 and its posters into `DIR` |
+| `./optimize.sh --clean NAME\|all` | Delete encode attempts and preview frames; keep sources, settings, reports and outputs |
 
-The exit code is non-zero when any job failed or a file was rejected.
+`NAME` is a video's folder name under `videos/`. Relative `FILE` and `DIR` paths
+are resolved from the directory you run the command in. The exit code is
+non-zero when any video failed or a file was rejected.
 
 ### Demo with generated clips
 
@@ -217,8 +269,8 @@ per-CRF lines are shortened:
 == Preflight ==
   ✓ ffmpeg: docker (docker:a8097f20436f)
   • Waiting 8s for files added to inbox/ in the last 10s to settle…
-  ✓ Queued Product Demo.mov as job 'product-demo'
-  ✓ Queued background-loop.mp4 as job 'background-loop'
+  ✓ Queued Product Demo.mov as videos/product-demo/
+  ✓ Queued background-loop.mp4 as videos/background-loop/
 
 == background-loop ==
   • Source: 69.59 MB | 1080x1920 @ 30 fps | 10 s | audio: none
@@ -228,7 +280,7 @@ per-CRF lines are shortened:
     … CRF 30, 28 and 26 also score below 90 …
   ✓ CRF 24 -> 14.54 MB (-79.1%), VMAF 88.58 (below 90) [encoded]
   ✓ CRF 22 -> 18.50 MB (-73.4%), VMAF 91.68 [encoded]
-  ✓ Delivered output/background-loop/background-loop.mp4 — 18.50 MB (-73.4%), CRF 22, VMAF 91.68
+  ✓ Delivered videos/background-loop/output/background-loop.mp4 — 18.50 MB (-73.4%), CRF 22, VMAF 91.68
 
 == product-demo ==
   • Source: 30.46 MB | 1920x1080 @ 60 fps | 10 s | audio: aac
@@ -242,12 +294,12 @@ per-CRF lines are shortened:
   • Encoding CRF 30…
   • Measuring VMAF for CRF 30 (roughly real-time)…
   ✓ CRF 30 -> 2.76 MB (-90.9%), VMAF 90.34 [encoded]
-  ✓ Delivered output/product-demo/product-demo.mp4 — 2.76 MB (-90.9%), CRF 30, VMAF 90.34
+  ✓ Delivered videos/product-demo/output/product-demo.mp4 — 2.76 MB (-90.9%), CRF 30, VMAF 90.34
 
 == Summary ==
-  JOB                                 SOURCE      OUTPUT   SAVED  CRF   VMAF  STATUS
-  background-loop                   69.59 MB    18.50 MB   73.4%   22  91.68  output/background-loop/
-  product-demo                      30.46 MB     2.76 MB   90.9%   30  90.34  output/product-demo/
+  VIDEO                               SOURCE      OUTPUT   SAVED  CRF   VMAF  STATUS
+  background-loop                   69.59 MB    18.50 MB   73.4%   22  91.68  videos/background-loop/output/
+  product-demo                      30.46 MB     2.76 MB   90.9%   30  90.34  videos/product-demo/output/
 ```
 
 What the run shows:
@@ -260,13 +312,13 @@ What the run shows:
   audio re-encoded to AAC. The portrait clip kept its orientation and full size,
   since 1920 px is within the cap.
 - **Re-runs are cheap.** Running `./optimize.sh` again reports nothing to do.
-  Editing `work/product-demo/job.env` (for example `FPS=24` and `AUDIO=strip`)
-  re-processes only that job.
+  Editing `videos/product-demo/job.env` (for example `FPS=24` and `AUDIO=strip`)
+  re-processes only that video.
 
-Each job also writes a `report.txt`:
+Each video also gets a `report.txt`:
 
 ```
-##### Run 2026-09-14 19:03:55 #####
+##### Run 2026-09-14 20:56:00 #####
 Source:  Product Demo.mov | 30.46 MB | 1920x1080 @ 60 fps | 10 s | yuv420p | audio: aac
 Output:  1920x1080 @ 30 fps | audio: aac-128k | x264 preset slow | docker:a8097f20436f
 job.env: no overrides
@@ -275,7 +327,7 @@ Quality: auto, VMAF >= 90, trying CRF 34 32 30 28 26 24 22 20
   CRF 32: 2.21 MB (-92.8%), VMAF 87.64 (below 90) [encoded]
   CRF 30: 2.76 MB (-90.9%), VMAF 90.34 [encoded]
 Chosen:  CRF 30, VMAF 90.34 | 2.76 MB (-90.9% vs source, 2210 kb/s)
-Output:  output/product-demo/product-demo.mp4, product-demo-poster.jpg, product-demo-poster.webp
+Output:  videos/product-demo/output/product-demo.mp4, product-demo-poster.jpg, product-demo-poster.webp
 ```
 
 Generated clips are an extreme case: they start at very high bitrates and
@@ -292,7 +344,7 @@ flowchart TD
     wait -.-> settle
     settle -- yes --> kind{"Supported,<br/>non-empty video?"}
     kind -- no --> failed[["failed/<br/>file + reason"]]
-    kind -- yes --> job["work/#lt;name#gt;/<br/>source + job.env<br/>(template + inbox .env sidecar)"]
+    kind -- yes --> job["videos/#lt;name#gt;/<br/>source + job.env<br/>(template + inbox .env sidecar)"]
     job --> probe{"ffprobe finds<br/>a video stream?"}
     probe -- no --> failed
     probe -- yes --> plan["Plan output<br/>size cap · fps cap · rotation · audio"]
@@ -302,7 +354,7 @@ flowchart TD
     single --> deliver
 
     mode -- "auto with VMAF=on" --> next["Take next CRF from CRFS<br/>highest = smallest file first"]
-    next --> encode["Encode candidate<br/>reused if .settings match"]
+    next --> encode["Encode into candidates/<br/>reused if .settings match"]
     encode --> score["VMAF vs source through the same filters<br/>reused if .vmaf matches"]
     score --> pass{"VMAF ≥<br/>VMAF_TARGET?"}
     pass -- yes --> deliver
@@ -310,50 +362,40 @@ flowchart TD
     pass -- "no, none left" --> best["Use best tried<br/>+ warning"]
     best --> deliver
 
-    deliver["output/#lt;name#gt;/<br/>MP4 · posters · report.txt"] --> done(["Job done"])
+    deliver["videos/#lt;name#gt;/output/<br/>MP4 · posters · report.txt"] --> done(["Video done"])
     done -. "job.env edited<br/>or --redo" .-> probe
 ```
 
 The agent's part happens before this flow starts. It writes the `inbox/<video>.env`
-sidecar that becomes the job's settings. Afterwards it uses `--frames` to check the
-result and edits `job.env` if something needs fixing.
+sidecar that becomes the video's settings. Afterwards it uses `--frames` to check
+the result and edits `job.env` if something needs fixing.
 
-Folder contents along the way:
-
-| Folder | Holds |
-|---|---|
-| `inbox/` | Videos waiting to be picked up, optionally with `<video>.env` settings sidecars |
-| `work/<name>/` | `source.<ext>`, `job.env`, `candidates/crfNN.mp4` with cache sidecars, `report.txt` history |
-| `output/<name>/` | `<name>.mp4`, `<name>-poster.jpg`/`.webp`, `report.txt` for the latest run |
-| `preview/<name>/` | Sampled frames from `--frames`, for the agent (or you) to review |
-| `failed/` | Rejected files, each with a reason |
-
-1. **Ingest.** Each file in `inbox/` is moved into its own job folder,
-   `work/<name>/`, where `<name>` is a slug of the filename (`My Clip.MOV` →
-   `my-clip`, with `-2`, `-3`… for repeats). A file is picked up only after it
-   has been unchanged for `INBOX_SETTLE` seconds (default 10), so a copy in
-   progress isn't processed half-written. For transfers that may stall longer,
-   copy under a temporary name such as `video.mp4.part` and rename it when done;
-   `.part`, `.crdownload`, `.download` and `.tmp` files are always skipped.
-   A `<video>.env` sidecar next to the file becomes the job's settings; drop it
-   first or together with the video, since a sidecar that arrives after its
-   video was picked up is reported as orphaned. Non-video, empty and unreadable
-   files go to `failed/` with a `.reason.txt`.
-   If ffmpeg reports read errors (a truncated or corrupt source), the job is
-   still delivered but flagged with warnings in the summary and report.
+1. **Ingest.** Each file in `inbox/` is moved into its own folder, `videos/<name>/`,
+   where `<name>` is a slug of the filename (`My Clip.MOV` → `my-clip`, with `-2`,
+   `-3`… for repeats). A file is picked up only after it has been unchanged for
+   `INBOX_SETTLE` seconds (default 10), so a copy in progress isn't processed
+   half-written. For transfers that may stall longer, copy under a temporary name
+   such as `video.mp4.part` and rename it when done; `.part`, `.crdownload`,
+   `.download` and `.tmp` files are always skipped. A `<video>.env` sidecar next
+   to the file becomes the video's settings; drop it first or together with the
+   video, since a sidecar that arrives after its video was picked up is reported
+   as orphaned. Non-video, empty and unreadable files go to `failed/` with a
+   reason. If ffmpeg reports read errors (a truncated or corrupt source), the
+   video is still delivered but flagged with warnings in the summary and report.
 2. **Plan.** ffprobe reads the source and the output is planned from the
    settings: the longest side capped at `MAX_DIMENSION` (never upscaled, always
    even), the frame rate capped at `MAX_FPS`, audio kept or stripped. Rotated
    phone videos are turned upright. A `job.env` template describing the source
    and the plan is written for per-video tweaks.
 3. **Search.** With `CRF_FINAL=auto`, CRFs from `CRFS` are tried from highest
-   (smallest file, fastest) to lowest. Each attempt is scored with VMAF, and the
-   first one reaching `VMAF_TARGET` is delivered, so easy content stops after one
-   encode and harder content steps down only as far as needed. If nothing reaches
-   the target, the best attempt is delivered with a warning.
-4. **Deliver.** The chosen encode is copied to `output/<name>/`, posters are taken
-   from it (so they match what plays), and the run is appended to the job's
-   `report.txt`.
+   (smallest file, fastest) to lowest. Each attempt is encoded into `candidates/`
+   and scored with VMAF, and the first one reaching `VMAF_TARGET` is delivered,
+   so easy content stops after one encode and harder content steps down only as
+   far as needed. If nothing reaches the target, the best attempt is delivered
+   with a warning.
+4. **Deliver.** The chosen encode is copied to `videos/<name>/output/`, posters
+   are taken from it (so they match what plays), and the run is appended to the
+   video's `report.txt`.
 
 ### Caching and re-runs
 
@@ -361,13 +403,14 @@ Every candidate has a `.settings` sidecar recording everything that affects its
 bytes: CRF, output size, frame rate, preset, tune, bitrate cap, audio plan and the
 exact Docker image. VMAF scores are cached the same way. A re-run reuses a
 candidate only when its sidecar matches, so changing a setting never serves a
-stale file, and re-running with unchanged settings costs seconds.
+stale file, and re-running with unchanged settings costs seconds. After
+`--clean`, the next re-run encodes again.
 
-A job counts as finished once `work/<name>/.done` exists. It is processed again
-when its `job.env` is edited or when you run `--redo`. A job that failed is
-retried on the next `./optimize.sh`; the watcher skips it until `job.env` changes,
-so a broken file isn't retried in a loop. Only one run can use a project at a
-time.
+A video counts as finished once `videos/<name>/.done` exists. It is processed
+again when its `job.env` is edited or when you run `--redo`. A video that failed
+is retried on the next `./optimize.sh`; the watcher skips it until `job.env`
+changes, so a broken file isn't retried in a loop. Only one run can use a project
+at a time.
 
 ### Measuring quality correctly
 
@@ -392,13 +435,14 @@ Settings come from four layers; later layers win:
 
 1. Built-in defaults (`lib/config.sh`)
 2. `config.env`, for every video in this project
-3. Per-video settings, which end up in `work/<name>/job.env`. They're set either:
+3. Per-video settings, which end up in `videos/<name>/job.env`. They're set
+   either:
    - before processing, by a sidecar named after the video plus `.env` next to it
      in `inbox/` (`clip.mov` → `clip.mov.env`). This is what the agent writes.
    - afterwards, by uncommenting lines in the generated `job.env`, which
-     re-processes the job on the next run.
+     re-processes the video on the next run.
 4. Environment variables, for one run: `VMAF=off ./optimize.sh`. These override
-   `job.env` for every job processed in that run, so pair them with
+   `job.env` for every video processed in that run, so pair them with
    `--redo <name>` to target one video.
 
 The config files are parsed as `KEY=VALUE`, never executed.
@@ -435,9 +479,9 @@ AUDIO=strip
 FPS=24
 ```
 
-Put these lines in `inbox/<video>.env` before the video is processed, in an existing
-job's `work/<name>/job.env`, or in `config.env` if every video in the project is a
-background loop. When you pass a file as an argument
+Put these lines in `inbox/<video>.env` before the video is processed, in an
+existing video's `videos/<name>/job.env`, or in `config.env` if every video in the
+project is a background loop. When you pass a file as an argument
 (`./optimize.sh ~/clips/background.mp4`), a `background.mp4.env` next to it is
 copied along with it. `--inspect` on an inbox file also applies its sidecar, so
 you can preview the plan first.
@@ -470,6 +514,8 @@ VMAF=off X264_PRESET=medium ./optimize.sh
   enough.
 - **Downloads.** `./optimize.sh URL` downloads inside the container. For a server
   on your own machine, use `host.docker.internal` instead of `localhost`.
+- **No Docker needed for bookkeeping.** `--list`, `--collect` and `--clean` only
+  read or delete local files, so they work even when Docker isn't running.
 - **Uninstalling.** Delete the project folder, then remove the image with
   `docker image rm linuxserver/ffmpeg:9.0-cli-ls81`. Nothing else was installed.
 
@@ -493,9 +539,10 @@ config.env         project-wide defaults
 lib/util.sh        logging and portable helpers
 lib/config.sh      settings layers, parsing and validation
 lib/media.sh       Docker ffmpeg calls, probing, output plan, encode, VMAF, posters
-lib/jobs.sh        inbox ingest, job lifecycle, reports, watch, list, frames
+lib/jobs.sh        inbox ingest, per-video folders, reports, watch, list, frames,
+                   collect, clean
 inbox/             drop videos (and .env sidecars) here
-work/  output/  failed/  preview/   created at runtime (git-ignored)
+videos/  failed/   created at runtime (git-ignored)
 ```
 
 ## Contributing

@@ -1,12 +1,15 @@
-# lib/jobs.sh — the drop-folder workflow: inbox/ -> work/<job>/ -> output/<job>/
+# lib/jobs.sh — the drop-folder workflow: inbox/ -> videos/<name>/
 #
-# Job state lives in work/<job>/:
+# Everything about one video lives in videos/<name>/:
 #   source.<ext>   the original (moved out of inbox/)
-#   job.env        per-video overrides (template written on first run)
-#   candidates/    crfNN.mp4 encodes + .settings/.vmaf cache sidecars
-#   report.txt     history of every run for this job
-#   .done          key=value summary of the last successful run
-#   .error         timestamp of the last failed run
+#   job.env        per-video settings (template written on first run)
+#   report.txt     history of every run
+#   output/        <name>.mp4, <name>-poster.jpg/.webp, report.txt (latest run)
+#   preview/       frames sampled with --frames (scratch)
+#   candidates/    crfNN.mp4 encodes + .settings/.vmaf cache sidecars (scratch)
+#   .job .done .error   bookkeeping
+# videos/_previews/<name>/ holds frames sampled from files that aren't jobs yet;
+# job names are slugs ([a-z0-9-]), so they never start with "_".
 
 VIDEO_EXTS="mp4 m4v mov mkv webm avi wmv flv mpg mpeg mts m2ts ts 3gp ogv"
 PARTIAL_EXTS="part crdownload download tmp partial"
@@ -15,11 +18,36 @@ RUN_NAMES=(); RUN_STATUS=(); RUN_FAILED=0
 ADDED_FILES=""  # newline-delimited inbox paths this run copied in itself (known complete)
 
 ensure_dirs() {
-  mkdir -p inbox work output failed
+  mkdir -p inbox videos failed
+  if [ -d work ] || [ -d output ]; then
+    warn "Found work/ or output/ from an older version. Jobs now live in videos/<name>/ (outputs in videos/<name>/output/); move them there or re-run the sources."
+  fi
+}
+
+abs_path() {  # abs_path <path> — relative paths resolve from where optimize.sh was run
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$CALLER_DIR" "$1" ;;
+  esac
+}
+
+is_job() {  # is_job <name> — an existing job folder (not _previews, not a path)
+  case "$1" in ''|_*|.*|*/*) return 1 ;; esac
+  [ -d "videos/$1" ]
+}
+
+job_names() {  # prints one job name per line
+  local d name
+  for d in videos/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    case "$name" in _*) continue ;; esac
+    printf '%s\n' "$name"
+  done
 }
 
 lock_acquire() {
-  local lock="work/.lock" pid
+  local lock="videos/.lock" pid
   if ! mkdir "$lock" 2>/dev/null; then
     pid="$(cat "$lock/pid" 2>/dev/null || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -29,7 +57,7 @@ lock_acquire() {
     mkdir "$lock"
   fi
   echo "$$" > "$lock/pid"
-  trap 'rm -rf "$ROOT_DIR/work/.lock"' EXIT
+  trap 'rm -rf "$ROOT_DIR/videos/.lock"' EXIT
   trap 'exit 130' INT TERM
 }
 
@@ -41,9 +69,9 @@ job_source() {  # job_source <job-dir> — prints the source path
   return 1
 }
 
-unique_name() {  # unique_name <slug> — not used by any job, output or failed entry
+unique_name() {  # unique_name <slug> — not used by any job or failed entry
   local n="$1" i=2
-  while [ -e "work/$n" ] || [ -e "output/$n" ] || [ -e "failed/$n" ]; do
+  while [ -e "videos/$n" ] || [ -e "failed/$n" ]; do
     n="$1-$i"; i=$((i + 1))
   done
   printf '%s' "$n"
@@ -88,7 +116,8 @@ add_to_inbox() {
       mv "inbox/.$name.part" "$dest"
       ;;
     *)
-      [ -f "$arg" ] || die "Not a file or URL: $arg"
+      arg="$(abs_path "$arg")"
+      [ -f "$arg" ] || die "Not a file or URL: $1"
       [ "$(cd "$(dirname "$arg")" && pwd)" != "$ROOT_DIR/inbox" ] || return 0
       dest="inbox/$(basename "$arg")"
       [ ! -e "$dest" ] || dest="inbox/$(date +%Y%m%d-%H%M%S)-$(basename "$arg")"
@@ -136,7 +165,7 @@ ingest_inbox() {
   if [ "${1:-}" = wait ]; then
     for f in inbox/*.env; do
       if [ -f "$f" ] && [ ! -f "${f%.env}" ]; then
-        warn "inbox/$(basename "$f") has no matching video (expected inbox/$(basename "${f%.env}")). If that video was already queued, put the settings in its work/<job>/job.env"
+        warn "inbox/$(basename "$f") has no matching video (expected inbox/$(basename "${f%.env}")). If that video was already queued, put the settings in its videos/<name>/job.env"
       fi
     done
   fi
@@ -169,22 +198,22 @@ ingest_inbox() {
     if ! in_words "$ext" "$VIDEO_EXTS"; then reject "$f" "unsupported file type '.$ext'"; continue; fi
 
     name="$(unique_name "$(slugify "$(basename "${f%.*}")")")"
-    mkdir -p "work/$name"
-    mv "$f" "work/$name/source.$ext"
-    printf 'original_name=%s\nqueued=%s\n' "$(basename "$f")" "$(date '+%Y-%m-%d %H:%M:%S')" > "work/$name/.job"
+    mkdir -p "videos/$name"
+    mv "$f" "videos/$name/source.$ext"
+    printf 'original_name=%s\nqueued=%s\n' "$(basename "$f")" "$(date '+%Y-%m-%d %H:%M:%S')" > "videos/$name/.job"
     if [ -f "$f.env" ]; then
-      { echo "# Settings from inbox/$(basename "$f").env"; cat "$f.env"; } > "work/$name/job.env"
+      { echo "# Settings from inbox/$(basename "$f").env"; cat "$f.env"; } > "videos/$name/job.env"
       rm -f "$f.env"
-      printf 'sidecar=%s\n' "$(basename "$f").env" >> "work/$name/.job"
-      ok "Queued $(basename "$f") as job '$name' with settings from $(basename "$f").env"
+      printf 'sidecar=%s\n' "$(basename "$f").env" >> "videos/$name/.job"
+      ok "Queued $(basename "$f") as videos/$name/ with settings from $(basename "$f").env"
     else
-      ok "Queued $(basename "$f") as job '$name'"
+      ok "Queued $(basename "$f") as videos/$name/"
     fi
   done
 }
 
 job_pending() {  # not yet delivered, or job.env edited since the last delivery
-  local d="work/$1"
+  local d="videos/$1"
   job_source "$d" >/dev/null || return 1
   [ -f "$d/.done" ] || return 0
   [ -f "$d/job.env" ] && [ "$d/job.env" -nt "$d/.done" ]
@@ -192,10 +221,10 @@ job_pending() {  # not yet delivered, or job.env edited since the last delivery
 
 write_job_env() {  # write_job_env <job-dir> <name> — commented template of every setting
   cat > "$1/job.env" <<EOF
-# Per-video settings for job '$2'.
+# Per-video settings for '$2'.
 # Uncomment and edit a line to override config.env for this video only, then run
-# ./optimize.sh again: the job is re-processed automatically, reusing any encodes
-# and VMAF scores whose settings still match.
+# ./optimize.sh again: the video is re-processed automatically, reusing any
+# encodes and VMAF scores whose settings still match.
 #
 # Source:  ${SRC_W}x${SRC_H}$( [ "$SRC_ROT" = 0 ] || printf ' rotated %s° (%sx%s)' "$SRC_ROT" "$DISP_W" "$DISP_H") @ $(fmt_num "$SRC_FPS") fps, $(fmt_num "$SRC_DURATION") s, audio: ${SRC_AUDIO:-none}
 # Planned: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS"), audio: $AUDIO_PLAN
@@ -235,7 +264,7 @@ rlog() { printf '%s\n' "$*" >> "$REPORT_RUN"; }
 
 # Runs inside a subshell with `set -e` (see run_job); any failure aborts the job only.
 process_job() {
-  local name="$1" d="work/$1" src overrides key sidecar crf_list mode crf pct kbps chosen="" score="" lowest="" lowest_score="" od warnings=0
+  local name="$1" d="videos/$1" src overrides key sidecar crf_list mode crf pct kbps chosen="" score="" lowest="" lowest_score="" od warnings=0
   src="$(job_source "$d")" || die "No source file in $d"
   REPORT_RUN="$d/.report.run"
   : > "$REPORT_RUN"
@@ -253,7 +282,7 @@ process_job() {
   plan_output
   if [ ! -f "$d/job.env" ]; then
     write_job_env "$d" "$name"
-  elif ! grep -q '^# Per-video settings for job' "$d/job.env"; then
+  elif ! grep -q '^# Per-video settings for' "$d/job.env"; then
     # Seeded from an inbox sidecar: add the documented template above those settings
     mv "$d/job.env" "$d/.job.env.seed"
     write_job_env "$d" "$name"
@@ -333,7 +362,7 @@ process_job() {
   fi
 
   # Deliver
-  od="output/$name"
+  od="$d/output"
   mkdir -p "$od"
   cp -f "$d/candidates/crf$chosen.mp4" "$od/$name.mp4"
   make_posters "$od/$name.mp4" "$od/$name-poster"
@@ -362,7 +391,7 @@ process_job() {
 }
 
 run_job() {
-  local name="$1" d="work/$1" rc
+  local name="$1" d="videos/$1" rc
   set +e
   ( set -e; process_job "$name" )
   rc=$?
@@ -381,14 +410,13 @@ run_job() {
     rm -f "$d/.report.run"
   fi
   date '+%Y-%m-%d %H:%M:%S' > "$d/.error"
-  warn "Job '$name' failed (exit $rc). Fix the cause and run again; see $d/report.txt"
+  warn "'$name' failed (exit $rc). Fix the cause and run again; see $d/report.txt"
 }
 
 process_pending() {
   local d name
-  for d in work/*/; do
-    [ -d "$d" ] || continue
-    name="$(basename "$d")"
+  for name in $(job_names); do
+    d="videos/$name"
     job_pending "$name" || continue
     # The watcher doesn't retry a failed job in a loop; editing job.env or --redo does
     if [ "$MODE" = watch ] && [ -f "$d/.error" ] && ! { [ -f "$d/job.env" ] && [ "$d/job.env" -nt "$d/.error" ]; }; then
@@ -403,14 +431,14 @@ print_summary() {
   [ "${#RUN_NAMES[@]}" -gt 0 ] || return 0
   bold ""
   bold "== Summary =="
-  printf '  %-30s %11s %11s %7s %4s %6s  %s\n' JOB SOURCE OUTPUT SAVED CRF VMAF STATUS
+  printf '  %-30s %11s %11s %7s %4s %6s  %s\n' VIDEO SOURCE OUTPUT SAVED CRF VMAF STATUS
   for i in "${!RUN_NAMES[@]}"; do
-    name="${RUN_NAMES[$i]}"; st="${RUN_STATUS[$i]}"; d="work/$name"
+    name="${RUN_NAMES[$i]}"; st="${RUN_STATUS[$i]}"; d="videos/$name"
     if [ "$st" = "done" ]; then
       printf '  %-30s %11s %11s %6s%% %4s %6s  %s\n' "$name" \
         "$(human_size "$(kv_get "$d/.done" source_bytes)")" "$(human_size "$(kv_get "$d/.done" output_bytes)")" \
         "$(kv_get "$d/.done" reduction)" "$(kv_get "$d/.done" crf)" "$(kv_get "$d/.done" vmaf)" \
-        "output/$name/$( [ "$(kv_get "$d/.done" warnings)" = 0 ] || printf ' (WARNINGS, see report)')"
+        "$d/output/$( [ "$(kv_get "$d/.done" warnings)" = 0 ] || printf ' (WARNINGS, see report)')"
     else
       printf '  %-30s %11s %11s %7s %4s %6s  %s\n' "$name" - - - - - "$st"
     fi
@@ -422,7 +450,7 @@ run_once() {  # run_once [watch] — watch: no settle wait, no "nothing to do" l
   if [ -n "${1:-}" ]; then ingest_inbox; else ingest_inbox wait; fi
   process_pending
   if [ "${#RUN_NAMES[@]}" -eq 0 ]; then
-    [ -n "${1:-}" ] || ok "Nothing to do: inbox/ is empty and every job is up to date (see --list)"
+    [ -n "${1:-}" ] || ok "Nothing to do: inbox/ is empty and every video is up to date (see --list)"
     return 0
   fi
   print_summary
@@ -438,26 +466,69 @@ watch_loop() {
   done
 }
 
-redo_jobs() {  # redo_jobs <name|all>... — mark jobs pending again
-  local n d
+redo_jobs() {  # redo_jobs <name|all>... — mark videos pending again
+  local n
   for n in "$@"; do
     if [ "$n" = all ]; then
-      for d in work/*/; do [ -d "$d" ] && rm -f "$d/.done" "$d/.error"; done
-      ok "All jobs marked for re-processing"
+      for n in $(job_names); do rm -f "videos/$n/.done" "videos/$n/.error"; done
+      ok "All videos marked for re-processing"
+      return 0
+    fi
+    is_job "$n" || die "No video named '$n' (see ./optimize.sh --list)"
+    rm -f "videos/$n/.done" "videos/$n/.error"
+    ok "'$n' marked for re-processing"
+  done
+}
+
+# collect <dir> — copy every delivered MP4 and its posters into one flat folder
+collect() {
+  local dest name od f n=0
+  dest="$(abs_path "$1")"
+  mkdir -p "$dest"
+  for name in $(job_names); do
+    od="videos/$name/output"
+    if [ ! -f "videos/$name/.done" ] || [ ! -f "$od/$name.mp4" ]; then continue; fi
+    for f in "$od/$name.mp4" "$od/$name-poster.jpg" "$od/$name-poster.webp"; do
+      if [ -f "$f" ]; then cp -f "$f" "$dest/"; fi
+    done
+    n=$((n + 1))
+  done
+  if [ "$n" -eq 0 ]; then
+    warn "No delivered videos to collect yet (see ./optimize.sh --list)"
+  else
+    ok "Copied $n video(s) and their posters to $dest"
+  fi
+}
+
+# clean <name|all>... — delete candidate encodes and sampled frames. Sources,
+# settings, reports and outputs stay; a later re-run simply encodes again.
+clean_jobs() {
+  local n targets p kb
+  targets=()
+  for n in "$@"; do
+    if [ "$n" = all ]; then
+      for n in $(job_names); do targets+=("videos/$n/candidates" "videos/$n/preview"); done
+      targets+=("videos/_previews")
     else
-      [ -d "work/$n" ] || die "No job named '$n' (see ./optimize.sh --list)"
-      rm -f "work/$n/.done" "work/$n/.error"
-      ok "Job '$n' marked for re-processing"
+      is_job "$n" || die "No video named '$n' (see ./optimize.sh --list)"
+      targets+=("videos/$n/candidates" "videos/$n/preview")
     fi
   done
+  kb=0
+  for p in ${targets[@]+"${targets[@]}"}; do
+    if [ -d "$p" ]; then
+      kb=$((kb + $(du -sk "$p" | awk '{print $1}')))
+      rm -rf "$p"
+    fi
+  done
+  ok "Removed candidate encodes and previews, freed $(human_size $((kb * 1024))). Outputs, sources and reports are kept."
 }
 
 list_jobs() {
   local d name st n=0 f
-  printf '  %-30s %-26s %11s %4s %6s\n' JOB STATUS OUTPUT CRF VMAF
-  for d in work/*/; do
-    [ -d "$d" ] || continue
-    name="$(basename "$d")"; n=$((n + 1))
+  printf '  %-30s %-26s %11s %4s %6s\n' VIDEO STATUS OUTPUT CRF VMAF
+  for name in $(job_names); do
+    d="videos/$name"; n=$((n + 1))
     if [ -f "$d/.done" ]; then
       st="done"
       if [ -f "$d/job.env" ] && [ "$d/job.env" -nt "$d/.done" ]; then st="pending (job.env edited)"; fi
@@ -473,7 +544,7 @@ list_jobs() {
       printf '  %-30s %-26s %11s %4s %6s\n' "$name" "$st" - - -
     fi
   done
-  [ "$n" -gt 0 ] || echo "  (no jobs yet)"
+  [ "$n" -gt 0 ] || echo "  (no videos yet)"
   n=0; for f in inbox/*; do case "$f" in *.env) ;; *) [ -f "$f" ] && n=$((n + 1)) ;; esac; done
   echo "  inbox/: $n video(s) waiting"
   for f in inbox/*.env; do
@@ -488,20 +559,21 @@ list_jobs() {
   echo "  failed/: $n rejected item(s)"
 }
 
-# resolve_input <file|job> — sets IN_PATH (as ffmpeg sees it), IN_HOST (host
-# path), IN_NAME and IN_JOB (job name, or empty for a plain file), and resolves
-# settings: the job's job.env, or a <file>.env sidecar next to a plain file.
+# resolve_input <file|name> — sets IN_PATH (as ffmpeg sees it), IN_HOST (host
+# path), IN_NAME and IN_JOB (video name, or empty for a plain file), and resolves
+# settings: the video's job.env, or a <file>.env sidecar next to a plain file.
 resolve_input() {
   local arg="$1"
   IN_JOB=""; FF_MOUNT_DIR=""
-  if [ -d "work/$arg" ]; then
+  if is_job "$arg"; then
     IN_JOB="$arg"; IN_NAME="$arg"
-    IN_PATH="$(job_source "work/$arg")" || die "Job '$arg' has no source"
+    IN_PATH="$(job_source "videos/$arg")" || die "'$arg' has no source file"
     IN_HOST="$IN_PATH"
-    config_resolve "work/$arg/job.env"
+    config_resolve "videos/$arg/job.env"
     return 0
   fi
-  [ -f "$arg" ] || die "Not a file or job name: $arg"
+  arg="$(abs_path "$arg")"
+  [ -f "$arg" ] || die "Not a file or video name: $1"
   IN_NAME="$(slugify "$(basename "${arg%.*}")")"
   if [ -f "$arg.env" ]; then
     info "Applying settings sidecar $(basename "$arg").env"
@@ -517,7 +589,7 @@ resolve_input() {
   esac
 }
 
-# inspect <file|job> — print what would be done, without encoding
+# inspect <file|name> — print what would be done, without encoding
 inspect() {
   local transfer kbps d
   resolve_input "$1"
@@ -536,17 +608,18 @@ inspect() {
   else
     echo "  Quality: CRF_FALLBACK=$CRF_FALLBACK (VMAF off)"
   fi
-  d="work/$IN_JOB"
+  d="videos/$IN_JOB"
   if [ -n "$IN_JOB" ] && [ -f "$d/.done" ]; then
     echo "  Last run: CRF $(kv_get "$d/.done" crf)$( [ -z "$(kv_get "$d/.done" vmaf)" ] || printf ', VMAF %s' "$(kv_get "$d/.done" vmaf)"), $(human_size "$(kv_get "$d/.done" output_bytes)") (-$(kv_get "$d/.done" reduction)%) on $(kv_get "$d/.done" finished)"
   fi
   FF_MOUNT_DIR=""
 }
 
-# frames <file|job> [count] — save evenly spaced frames to preview/<name>/ for
-# visual review. Before encoding they are capped at 1280 px wide to stay light.
-# For a delivered job each timestamp gets a source frame scaled to the output
-# size and the output frame at native size, so artifacts aren't hidden by scaling.
+# frames <file|name> [count] — save evenly spaced frames for visual review, to
+# videos/<name>/preview/ for a video, or videos/_previews/<name>/ for a plain file.
+# Before encoding they are capped at 1280 px wide to stay light. For a delivered
+# video each timestamp gets a source frame scaled to the output size and the
+# output frame at native size, so artifacts aren't hidden by scaling.
 frames() {
   local count="${2:-6}" out delivered="" i t label scale f
   { is_int "$count" && [ "$count" -ge 1 ] && [ "$count" -le 60 ]; } || die "Frame count must be 1-60 (got '$count')"
@@ -554,11 +627,15 @@ frames() {
   probe_source "$IN_PATH" "$IN_HOST" || die "$1: no readable video stream"
   plan_output
   scale="scale='min(1280,iw)':-2"
-  if [ -n "$IN_JOB" ] && [ -f "output/$IN_JOB/$IN_JOB.mp4" ]; then
-    delivered="output/$IN_JOB/$IN_JOB.mp4"
-    scale="scale=$OUT_W:$OUT_H:flags=lanczos"
+  if [ -n "$IN_JOB" ]; then
+    out="videos/$IN_JOB/preview"
+    if [ -f "videos/$IN_JOB/output/$IN_JOB.mp4" ]; then
+      delivered="videos/$IN_JOB/output/$IN_JOB.mp4"
+      scale="scale=$OUT_W:$OUT_H:flags=lanczos"
+    fi
+  else
+    out="videos/_previews/$IN_NAME"
   fi
-  out="preview/$IN_NAME"
   rm -rf "$out"
   mkdir -p "$out"
   info "Sampling $count frame(s) from $1$( [ -z "$delivered" ] || printf ' and %s' "$delivered")…"

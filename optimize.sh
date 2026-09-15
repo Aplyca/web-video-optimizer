@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# optimize.sh — drop-folder web video optimizer
+# optimize.sh — web video optimizer
 #
 # Drop videos into inbox/ and run ./optimize.sh (or leave ./optimize.sh --watch
-# running). Each video becomes a job in work/<name>/; the web-ready MP4, posters
-# and report land in output/<name>/. Quality is picked automatically with VMAF.
-# Requires bash 3.2+ and either Docker or ffmpeg with libx264 + libvmaf.
+# running), or ask an AI coding agent to do it (see AGENTS.md). Each video gets
+# one folder, videos/<name>/, holding its source, settings, report, candidate
+# encodes, previews and the web-ready output. Quality is chosen with VMAF.
+# Requires only bash and Docker: all video work runs in a pinned container.
 # See README.md for the workflow and every setting.
 
 set -euo pipefail
 
+CALLER_DIR="$PWD"  # relative FILE/DIR arguments resolve from here
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
@@ -25,24 +27,28 @@ cd "$ROOT_DIR"
 usage() {
   cat <<'EOF'
 Usage:
-  ./optimize.sh                    Process every video in inbox/ plus unfinished jobs
+  ./optimize.sh                    Process every video in inbox/ plus unfinished ones
   ./optimize.sh FILE|URL ...       Copy/download into inbox/, then process
   ./optimize.sh --watch [SECONDS]  Keep processing whatever lands in inbox/
-  ./optimize.sh --list             Show jobs and their status
-  ./optimize.sh --redo NAME|all    Re-process jobs (cached encodes are reused)
+  ./optimize.sh --list             Show videos and their status
+  ./optimize.sh --redo NAME|all    Re-process videos (cached encodes are reused)
   ./optimize.sh --inspect FILE|NAME  Show source details and the output plan only
   ./optimize.sh --frames FILE|NAME [COUNT]
-                                   Save sample frames to preview/ for visual review
-                                   (source vs output for a delivered job)
+                                   Save sample frames for visual review
+                                   (source vs output for a delivered video)
+  ./optimize.sh --collect DIR      Copy every finished MP4 and its posters into DIR
+  ./optimize.sh --clean NAME|all   Delete candidate encodes and previews (keeps outputs)
   ./optimize.sh --help
 
-Settings: config.env (all videos) < work/NAME/job.env (one video) < environment
+Each video lives in videos/NAME/: source, job.env, report.txt, output/, preview/,
+candidates/.
+Settings: config.env (all videos) < videos/NAME/job.env (one video) < environment
   e.g.  VMAF=off ./optimize.sh      CRF_FINAL=24 ./optimize.sh --redo intro
 EOF
 }
 
 main() {
-  local interval=""
+  local interval="" arg
   MODE=run
   case "${1:-}" in
     -h|--help) usage; return 0 ;;
@@ -53,37 +59,41 @@ main() {
         interval="$1"; shift
       fi ;;
     --list) MODE=list; shift ;;
-    --redo) MODE=redo; shift; [ $# -gt 0 ] || die "--redo needs a job name or 'all'" ;;
-    --inspect) MODE=inspect; shift; [ $# -gt 0 ] || die "--inspect needs a file or job name" ;;
+    --redo) MODE=redo; shift; [ $# -gt 0 ] || die "--redo needs a video name or 'all'" ;;
+    --inspect) MODE=inspect; shift; [ $# -gt 0 ] || die "--inspect needs a file or video name" ;;
     --frames)
       MODE=frames; shift
-      { [ $# -ge 1 ] && [ $# -le 2 ]; } || die "--frames needs a file or job name, and optionally a frame count" ;;
+      { [ $# -ge 1 ] && [ $# -le 2 ]; } || die "--frames needs a file or video name, and optionally a frame count" ;;
+    --collect) MODE=collect; shift; [ $# -eq 1 ] || die "--collect needs exactly one destination folder" ;;
+    --clean) MODE=clean; shift; [ $# -gt 0 ] || die "--clean needs a video name or 'all'" ;;
     -*) usage >&2; die "Unknown option: $1" ;;
   esac
-  [ "$MODE" = run ] || [ "$MODE" = redo ] || [ "$MODE" = inspect ] || [ "$MODE" = frames ] || [ $# -eq 0 ] \
-    || die "Unexpected arguments: $*"
+  case "$MODE" in
+    run|redo|inspect|frames|collect|clean) ;;
+    *) [ $# -eq 0 ] || die "Unexpected arguments: $*" ;;
+  esac
 
   config_snapshot_env
   config_resolve ""
   ensure_dirs
 
-  if [ "$MODE" = list ]; then
-    list_jobs
-    return 0
-  fi
+  # These only read or delete local files, so they don't need Docker
+  case "$MODE" in
+    list) list_jobs; return 0 ;;
+    collect) collect "$1"; return 0 ;;
+    clean) lock_acquire; clean_jobs "$@"; return 0 ;;
+  esac
 
   bold "== Preflight =="
   runner_init
 
   case "$MODE" in
     inspect)
-      local arg
       for arg in "$@"; do inspect "$arg"; done ;;
     frames)
       frames "$@" ;;
     run)
       lock_acquire
-      local arg
       for arg in "$@"; do add_to_inbox "$arg"; done
       run_once ;;
     redo)

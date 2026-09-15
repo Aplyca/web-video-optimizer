@@ -1,5 +1,5 @@
 # lib/config.sh — settings, lowest to highest precedence:
-#   built-in defaults < config.env < work/<job>/job.env < environment variables
+#   built-in defaults < config.env < videos/<name>/job.env < environment variables
 # Config files are parsed as KEY=VALUE (never executed); unknown keys are ignored.
 
 CONFIG_KEYS="CRF_FINAL CRFS CRF_FALLBACK VMAF VMAF_TARGET MAX_DIMENSION FPS MAX_FPS AUDIO AUDIO_BITRATE AUDIO_CHANNELS X264_PRESET X264_TUNE MAX_BITRATE POSTER_TIME FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"

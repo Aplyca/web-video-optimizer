@@ -19,7 +19,8 @@ Claude Code specifics:
   Read the preview frames, since that sends them to the model. Ask the user to
   describe the content instead.
 - **Viewing frames:** use the Read tool on the JPEGs that `./optimize.sh --frames`
-  writes to `preview/<name>/`. Look at every sampled frame before choosing
+  writes, and whose paths it prints: `videos/_previews/<name>/` before processing,
+  `videos/<name>/preview/` after. Look at every sampled frame before choosing
   settings. When verifying, compare each `NN-source` / `NN-output` pair.
 - **Asking about intent:** when the use isn't clear from the request, the filename
   or the frames, ask with AskUserQuestion before writing the sidecar. Offer
@@ -34,6 +35,7 @@ Claude Code specifics:
   CRF tried. Give `./optimize.sh` a generous Bash timeout, or run it in the
   background, and don't poll in a tight loop.
 - **Several videos:** inspect and sample each one, and write every sidecar first.
-  Then run `./optimize.sh` once, which processes them all.
+  Then run `./optimize.sh` once, which processes them all. Afterwards, offer
+  `./optimize.sh --collect <folder>` to gather the finished files in one place.
 - **Finish** with the report described in AGENTS.md: settings and reasons,
   size before → after, CRF, VMAF, and any concerns.
