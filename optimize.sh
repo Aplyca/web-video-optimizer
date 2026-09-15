@@ -31,6 +31,9 @@ Usage:
   ./optimize.sh --list             Show jobs and their status
   ./optimize.sh --redo NAME|all    Re-process jobs (cached encodes are reused)
   ./optimize.sh --inspect FILE|NAME  Show source details and the output plan only
+  ./optimize.sh --frames FILE|NAME [COUNT]
+                                   Save sample frames to preview/ for visual review
+                                   (source vs output for a delivered job)
   ./optimize.sh --help
 
 Settings: config.env (all videos) < work/NAME/job.env (one video) < environment
@@ -52,9 +55,12 @@ main() {
     --list) MODE=list; shift ;;
     --redo) MODE=redo; shift; [ $# -gt 0 ] || die "--redo needs a job name or 'all'" ;;
     --inspect) MODE=inspect; shift; [ $# -gt 0 ] || die "--inspect needs a file or job name" ;;
+    --frames)
+      MODE=frames; shift
+      { [ $# -ge 1 ] && [ $# -le 2 ]; } || die "--frames needs a file or job name, and optionally a frame count" ;;
     -*) usage >&2; die "Unknown option: $1" ;;
   esac
-  [ "$MODE" = run ] || [ "$MODE" = redo ] || [ "$MODE" = inspect ] || [ $# -eq 0 ] \
+  [ "$MODE" = run ] || [ "$MODE" = redo ] || [ "$MODE" = inspect ] || [ "$MODE" = frames ] || [ $# -eq 0 ] \
     || die "Unexpected arguments: $*"
 
   config_snapshot_env
@@ -73,6 +79,8 @@ main() {
     inspect)
       local arg
       for arg in "$@"; do inspect "$arg"; done ;;
+    frames)
+      frames "$@" ;;
     run)
       lock_acquire
       local arg

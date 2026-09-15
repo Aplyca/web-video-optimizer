@@ -2,7 +2,7 @@
 #   built-in defaults < config.env < work/<job>/job.env < environment variables
 # Config files are parsed as KEY=VALUE (never executed); unknown keys are ignored.
 
-CONFIG_KEYS="CRF_FINAL CRFS CRF_FALLBACK VMAF VMAF_TARGET MAX_DIMENSION FPS MAX_FPS AUDIO AUDIO_BITRATE X264_PRESET POSTER_TIME FFMPEG_RUNNER FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
+CONFIG_KEYS="CRF_FINAL CRFS CRF_FALLBACK VMAF VMAF_TARGET MAX_DIMENSION FPS MAX_FPS AUDIO AUDIO_BITRATE AUDIO_CHANNELS X264_PRESET X264_TUNE MAX_BITRATE POSTER_TIME FFMPEG_RUNNER FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
 # These pick the toolchain or drive the inbox, so they can't vary per job
 GLOBAL_ONLY_KEYS="FFMPEG_RUNNER FFMPEG_IMAGE WATCH_INTERVAL INBOX_SETTLE"
 
@@ -17,7 +17,10 @@ config_defaults() {  # keep in sync with config.env
   MAX_FPS=30
   AUDIO=keep
   AUDIO_BITRATE=128k
+  AUDIO_CHANNELS=auto
   X264_PRESET=slow
+  X264_TUNE=none
+  MAX_BITRATE=none
   POSTER_TIME=1
   FFMPEG_RUNNER=auto
   FFMPEG_IMAGE=linuxserver/ffmpeg:9.0-cli-ls81
@@ -100,8 +103,15 @@ config_validate() {
   case "$AUDIO_BITRATE" in
     *[!0-9k]*|k*|'') die "AUDIO_BITRATE must look like 128k (got '$AUDIO_BITRATE')" ;;
   esac
+  in_words "$AUDIO_CHANNELS" "auto mono stereo" || die "AUDIO_CHANNELS must be auto, mono or stereo (got '$AUDIO_CHANNELS')"
   in_words "$X264_PRESET" "ultrafast superfast veryfast faster fast medium slow slower veryslow placebo" \
     || die "X264_PRESET '$X264_PRESET' is not an x264 preset"
+  in_words "$X264_TUNE" "none film animation grain stillimage" \
+    || die "X264_TUNE must be none, film, animation, grain or stillimage (got '$X264_TUNE')"
+  if [ "$MAX_BITRATE" != none ]; then
+    c="${MAX_BITRATE%[kM]}"
+    { is_int "$c" && [ "$c" -gt 0 ]; } || die "MAX_BITRATE must be 'none' or like 3000k / 3M (got '$MAX_BITRATE')"
+  fi
   is_number "$POSTER_TIME" || die "POSTER_TIME must be seconds (got '$POSTER_TIME')"
   in_words "$FFMPEG_RUNNER" "auto docker native" || die "FFMPEG_RUNNER must be auto, docker or native (got '$FFMPEG_RUNNER')"
   { is_int "$WATCH_INTERVAL" && [ "$WATCH_INTERVAL" -ge 1 ]; } || die "WATCH_INTERVAL must be whole seconds >= 1 (got '$WATCH_INTERVAL')"

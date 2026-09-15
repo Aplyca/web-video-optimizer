@@ -153,13 +153,32 @@ plan_output() {
   fi
   FILTERS="${parts:-null}"
 
+  # Encoder tuning and rate cap; recorded in VIDEO_PLAN only when set, so default
+  # runs keep their existing cache keys
+  VIDEO_ARGS=(); VIDEO_PLAN=""
+  if [ "$X264_TUNE" != none ]; then
+    VIDEO_ARGS+=(-tune "$X264_TUNE")
+    VIDEO_PLAN="tune=$X264_TUNE"
+  fi
+  if [ "$MAX_BITRATE" != none ]; then
+    local rate="${MAX_BITRATE%[kM]}" unit="${MAX_BITRATE#"${MAX_BITRATE%[kM]}"}"
+    VIDEO_ARGS+=(-maxrate "$MAX_BITRATE" -bufsize "$((rate * 2))$unit")
+    VIDEO_PLAN="${VIDEO_PLAN:+$VIDEO_PLAN }maxrate=$MAX_BITRATE"
+  fi
+
   if [ "$AUDIO" = keep ] && [ "$SRC_HAS_AUDIO" = 1 ]; then
     AUDIO_PLAN="aac-$AUDIO_BITRATE"
     AUDIO_ARGS=(-map 0:a:0 -c:a aac -b:a "$AUDIO_BITRATE")
-    if is_int "$SRC_AUDIO_CH" && [ "$SRC_AUDIO_CH" -gt 2 ]; then
-      AUDIO_ARGS+=(-ac 2)
-      AUDIO_PLAN="$AUDIO_PLAN-stereo"
-    fi
+    case "$AUDIO_CHANNELS" in
+      mono)
+        AUDIO_ARGS+=(-ac 1); AUDIO_PLAN="$AUDIO_PLAN-mono" ;;
+      stereo)
+        AUDIO_ARGS+=(-ac 2); AUDIO_PLAN="$AUDIO_PLAN-stereo" ;;
+      auto)  # downmix surround, leave mono and stereo alone
+        if is_int "$SRC_AUDIO_CH" && [ "$SRC_AUDIO_CH" -gt 2 ]; then
+          AUDIO_ARGS+=(-ac 2); AUDIO_PLAN="$AUDIO_PLAN-stereo"
+        fi ;;
+    esac
   else
     AUDIO_PLAN=none
     AUDIO_ARGS=(-an)
@@ -167,8 +186,8 @@ plan_output() {
 }
 
 candidate_key() {  # everything that affects a candidate's bytes
-  printf 'crf=%s size=%sx%s fps=%s preset=%s audio=%s engine=%s' \
-    "$1" "$OUT_W" "$OUT_H" "$OUT_FPS" "$X264_PRESET" "$AUDIO_PLAN" "$FFMPEG_ID"
+  printf 'crf=%s size=%sx%s fps=%s preset=%s audio=%s engine=%s%s' \
+    "$1" "$OUT_W" "$OUT_H" "$OUT_FPS" "$X264_PRESET" "$AUDIO_PLAN" "$FFMPEG_ID" "${VIDEO_PLAN:+ $VIDEO_PLAN}"
 }
 
 # encode_candidate <job-dir> <source> <crf> — sets CAND, CAND_KEY, CAND_STATUS and
@@ -191,7 +210,8 @@ encode_candidate() {
     if ! ff ffmpeg -hide_banner -loglevel error -nostats -y \
       -i "$src" -map 0:V:0 "${AUDIO_ARGS[@]}" \
       -map_metadata -1 -map_chapters -1 \
-      -c:v libx264 -crf "$crf" -preset "$X264_PRESET" -profile:v high -pix_fmt yuv420p \
+      -c:v libx264 -crf "$crf" -preset "$X264_PRESET" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"} \
+      -profile:v high -pix_fmt yuv420p \
       -vf "$FILTERS" -movflags +faststart \
       "$tmp" 2> "$log"; then
       cat "$log" >&2

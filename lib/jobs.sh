@@ -211,8 +211,14 @@ write_job_env() {  # write_job_env <job-dir> <name> — commented template of ev
 # keep | strip
 #AUDIO=$AUDIO
 #AUDIO_BITRATE=$AUDIO_BITRATE
+# auto | mono | stereo
+#AUDIO_CHANNELS=$AUDIO_CHANNELS
 
 #X264_PRESET=$X264_PRESET
+# none | film | animation | grain | stillimage
+#X264_TUNE=$X264_TUNE
+# none, or a peak video bitrate cap such as 900k or 3M
+#MAX_BITRATE=$MAX_BITRATE
 #POSTER_TIME=$POSTER_TIME
 EOF
 }
@@ -255,10 +261,10 @@ process_job() {
   done
 
   info "Source: $(human_size "$SRC_BYTES") | ${DISP_W}x${DISP_H} @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | audio: ${SRC_AUDIO:-none}"
-  info "Output: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | preset $X264_PRESET"
+  info "Output: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | preset $X264_PRESET${VIDEO_PLAN:+ | $VIDEO_PLAN}"
   rlog "##### Run $(date '+%Y-%m-%d %H:%M:%S') #####"
   rlog "Source:  $(kv_get "$d/.job" original_name) | $(human_size "$SRC_BYTES") | ${SRC_W}x${SRC_H}$( [ "$SRC_ROT" = 0 ] || printf ' rotated %s°' "$SRC_ROT") @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | ${SRC_PIXFMT} | audio: ${SRC_AUDIO:-none}"
-  rlog "Output:  ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | x264 preset $X264_PRESET | $FFMPEG_ID"
+  rlog "Output:  ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | x264 preset $X264_PRESET${VIDEO_PLAN:+ | $VIDEO_PLAN} | $FFMPEG_ID"
   rlog "job.env: ${overrides:-no overrides}${sidecar:+ (seeded from inbox/$sidecar)}"
 
   case "$SRC_TRANSFER" in
@@ -474,35 +480,47 @@ list_jobs() {
   echo "  failed/: $n rejected item(s)"
 }
 
+# resolve_input <file|job> — sets IN_PATH (as ffmpeg sees it), IN_HOST (host
+# path), IN_NAME and IN_JOB (job name, or empty for a plain file), and resolves
+# settings: the job's job.env, or a <file>.env sidecar next to a plain file.
+resolve_input() {
+  local arg="$1"
+  IN_JOB=""; FF_MOUNT_DIR=""
+  if [ -d "work/$arg" ]; then
+    IN_JOB="$arg"; IN_NAME="$arg"
+    IN_PATH="$(job_source "work/$arg")" || die "Job '$arg' has no source"
+    IN_HOST="$IN_PATH"
+    config_resolve "work/$arg/job.env"
+    return 0
+  fi
+  [ -f "$arg" ] || die "Not a file or job name: $arg"
+  IN_NAME="$(slugify "$(basename "${arg%.*}")")"
+  if [ -f "$arg.env" ]; then
+    info "Applying settings sidecar $(basename "$arg").env"
+    config_resolve "$arg.env"
+  else
+    config_resolve ""
+  fi
+  IN_HOST="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
+  IN_PATH="$IN_HOST"
+  case "$IN_PATH" in
+    "$ROOT_DIR"/*) IN_PATH="${IN_PATH#"$ROOT_DIR"/}" ;;
+    *) if [ "$RUNNER" = docker ]; then FF_MOUNT_DIR="$(dirname "$IN_PATH")"; IN_PATH="/in/$(basename "$IN_PATH")"; fi ;;
+  esac
+}
+
 # inspect <file|job> — print what would be done, without encoding
 inspect() {
-  local arg="$1" path host_path
-  if [ -d "work/$arg" ]; then
-    path="$(job_source "work/$arg")" || die "Job '$arg' has no source"
-    host_path="$path"
-    config_resolve "work/$arg/job.env"
-  else
-    [ -f "$arg" ] || die "Not a file or job name: $arg"
-    if [ -f "$arg.env" ]; then
-      info "Applying settings sidecar $(basename "$arg").env"
-      config_resolve "$arg.env"
-    else
-      config_resolve ""
-    fi
-    host_path="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
-    path="$host_path"
-    case "$path" in
-      "$ROOT_DIR"/*) path="${path#"$ROOT_DIR"/}" ;;
-      *) if [ "$RUNNER" = docker ]; then FF_MOUNT_DIR="$(dirname "$path")"; path="/in/$(basename "$path")"; fi ;;
-    esac
-  fi
-  probe_source "$path" "$host_path" || die "$arg: no readable video stream"
+  local transfer kbps d
+  resolve_input "$1"
+  probe_source "$IN_PATH" "$IN_HOST" || die "$1: no readable video stream"
   plan_output
-  bold "== $arg =="
-  local transfer="$SRC_TRANSFER"
+  transfer="$SRC_TRANSFER"
   [ "$transfer" != unknown ] || transfer=""
-  echo "  Source:  $(human_size "$SRC_BYTES") | ${SRC_W}x${SRC_H}$( [ "$SRC_ROT" = 0 ] || printf ' rotated %s° -> %sx%s' "$SRC_ROT" "$DISP_W" "$DISP_H") @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | $SRC_PIXFMT${transfer:+ | $transfer} | audio: ${SRC_AUDIO:-none}${SRC_AUDIO_CH:+ ${SRC_AUDIO_CH}ch}"
-  echo "  Planned: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | filters: $FILTERS"
+  kbps="$(awk -v a="$SRC_BYTES" -v d="$SRC_DURATION" 'BEGIN{ if (d > 0) printf "%d", a * 8 / d / 1000; else print "?" }')"
+  bold "== $1 =="
+  echo "  Source:  $(human_size "$SRC_BYTES") | ${SRC_W}x${SRC_H}$( [ "$SRC_ROT" = 0 ] || printf ' rotated %s° -> %sx%s' "$SRC_ROT" "$DISP_W" "$DISP_H") @ $(fmt_num "$SRC_FPS") fps | $(fmt_num "$SRC_DURATION") s | $kbps kb/s | $SRC_PIXFMT${transfer:+ | $transfer} | audio: ${SRC_AUDIO:-none}${SRC_AUDIO_CH:+ ${SRC_AUDIO_CH}ch}"
+  echo "  Planned: ${OUT_W}x${OUT_H} @ $( [ "$OUT_FPS" = keep ] && printf 'source fps' || printf '%s fps' "$OUT_FPS") | audio: $AUDIO_PLAN | preset $X264_PRESET${VIDEO_PLAN:+ | $VIDEO_PLAN} | filters: $FILTERS"
   if [ "$CRF_FINAL" != auto ]; then
     echo "  Quality: fixed CRF $CRF_FINAL"
   elif [ "$VMAF" = on ]; then
@@ -510,5 +528,41 @@ inspect() {
   else
     echo "  Quality: CRF_FALLBACK=$CRF_FALLBACK (VMAF off)"
   fi
+  d="work/$IN_JOB"
+  if [ -n "$IN_JOB" ] && [ -f "$d/.done" ]; then
+    echo "  Last run: CRF $(kv_get "$d/.done" crf)$( [ -z "$(kv_get "$d/.done" vmaf)" ] || printf ', VMAF %s' "$(kv_get "$d/.done" vmaf)"), $(human_size "$(kv_get "$d/.done" output_bytes)") (-$(kv_get "$d/.done" reduction)%) on $(kv_get "$d/.done" finished)"
+  fi
   FF_MOUNT_DIR=""
+}
+
+# frames <file|job> [count] — save evenly spaced frames to preview/<name>/ for
+# visual review. Before encoding they are capped at 1280 px wide to stay light.
+# For a delivered job each timestamp gets a source frame scaled to the output
+# size and the output frame at native size, so artifacts aren't hidden by scaling.
+frames() {
+  local count="${2:-6}" out delivered="" i t label scale f
+  { is_int "$count" && [ "$count" -ge 1 ] && [ "$count" -le 60 ]; } || die "Frame count must be 1-60 (got '$count')"
+  resolve_input "$1"
+  probe_source "$IN_PATH" "$IN_HOST" || die "$1: no readable video stream"
+  plan_output
+  scale="scale='min(1280,iw)':-2"
+  if [ -n "$IN_JOB" ] && [ -f "output/$IN_JOB/$IN_JOB.mp4" ]; then
+    delivered="output/$IN_JOB/$IN_JOB.mp4"
+    scale="scale=$OUT_W:$OUT_H:flags=lanczos"
+  fi
+  out="preview/$IN_NAME"
+  rm -rf "$out"
+  mkdir -p "$out"
+  info "Sampling $count frame(s) from $1$( [ -z "$delivered" ] || printf ' and %s' "$delivered")…"
+  for i in $(seq 1 "$count"); do
+    t="$(awk -v d="$SRC_DURATION" -v i="$i" -v n="$count" 'BEGIN{ printf "%.2f", d * (i - 0.5) / n }')"
+    label="$(printf '%02d' "$i")"
+    ff ffmpeg -hide_banner -loglevel error -y -ss "$t" -i "$IN_PATH" -frames:v 1 -vf "$scale" -q:v 2 "$out/$label-source-${t}s.jpg"
+    if [ -n "$delivered" ]; then
+      ff ffmpeg -hide_banner -loglevel error -y -ss "$t" -i "$delivered" -frames:v 1 -q:v 2 "$out/$label-output-${t}s.jpg"
+    fi
+  done
+  FF_MOUNT_DIR=""
+  ok "Frames written to $out/"
+  for f in "$out"/*.jpg; do echo "    $f"; done
 }

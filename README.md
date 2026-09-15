@@ -143,6 +143,7 @@ already compressed for the web shrinks much less.
 | `./optimize.sh --list` | Show jobs and their status |
 | `./optimize.sh --redo NAME\|all` | Re-process jobs (matching encodes are reused) |
 | `./optimize.sh --inspect FILE\|NAME` | Show source details and the output plan, no encoding |
+| `./optimize.sh --frames FILE\|NAME [COUNT]` | Save sample frames to `preview/<name>/`; for a delivered job, source and output frames at the same timestamps |
 
 The exit code is non-zero when any job failed or a file was rejected.
 
@@ -269,7 +270,10 @@ The config files are parsed as `KEY=VALUE`, never executed.
 | `MAX_FPS` | `30` | Cap used by `FPS=auto` |
 | `AUDIO` | `keep` | `keep` re-encodes to AAC (surround downmixed to stereo); `strip` removes it |
 | `AUDIO_BITRATE` | `128k` | AAC bitrate |
+| `AUDIO_CHANNELS` | `auto` | `auto` downmixes surround only; `mono` for speech; `stereo` always two channels |
 | `X264_PRESET` | `slow` | Slower presets give smaller files at the same quality |
+| `X264_TUNE` | `none` | `film`, `animation`, `grain` or `stillimage` to tune x264 for the content |
+| `MAX_BITRATE` | `none` | Peak video bitrate cap such as `900k` or `3M`, for strict size budgets |
 | `POSTER_TIME` | `1` | Poster frame time in seconds (clamped to half the duration) |
 | `FFMPEG_RUNNER` | `auto` | `auto`, `docker` or `native` (config.env or environment only) |
 | `FFMPEG_IMAGE` | `linuxserver/ffmpeg:9.0-cli-ls81` | Docker image, pinned for reproducibility |
@@ -307,6 +311,36 @@ CRF_FINAL=24 ./optimize.sh --redo my-video
 VMAF=off X264_PRESET=medium ./optimize.sh
 ```
 
+## Letting an AI agent choose the settings
+
+The script measures what it can: resolution, frame rate and quality through
+VMAF. It can't know what a video is for, or what's in it. Is the audio a
+voice-over or never heard? Is it camera footage, motion graphics or a screen
+recording with small text? Where will it play? Those answers decide settings like
+`AUDIO`, `X264_TUNE`, `VMAF_TARGET` and `POSTER_TIME`.
+
+An AI coding agent can supply them. [`AGENTS.md`](AGENTS.md) gives any agent the
+workflow:
+
+1. Inspect the video.
+2. Look at sampled frames (`--frames`).
+3. Establish the intended use, asking you when it's unclear.
+4. Write the `.env` sidecar with a reason for each setting.
+5. Run the optimizer.
+6. Compare source and output frames, and adjust if needed.
+
+It also includes a decision guide that maps uses and content types to settings,
+and rules. Two rules matter most: agents only write settings files, and footage
+never leaves the machine.
+
+With [Claude Code](https://claude.com/claude-code), the repository includes an
+`optimize-video` skill, so a request like this is enough:
+
+> Optimize inbox/launch-video.mov. It's the muted background on our pricing page.
+
+Settings written this way go through the same validation as hand-written ones,
+and every encode still has to pass the VMAF check.
+
 ## Requirements
 
 - bash 3.2+ with standard tools (`awk`, `sed`, `stat`, `curl` for URLs)
@@ -332,10 +366,12 @@ Docker otherwise. The first Docker run pulls the image.
 ```
 optimize.sh        entry point and command-line options
 config.env         project-wide defaults
+AGENTS.md          guide for AI agents choosing per-video settings
+.claude/skills/    Claude Code skill (optimize-video) that follows AGENTS.md
 lib/util.sh        logging and portable helpers
 lib/config.sh      settings layers, parsing and validation
 lib/media.sh       ffmpeg runner, probing, output plan, encode, VMAF, posters
 lib/jobs.sh        inbox ingest, job lifecycle, reports, watch, list
 inbox/             drop videos here
-work/  output/  failed/   created at runtime (git-ignored)
+work/  output/  failed/  preview/   created at runtime (git-ignored)
 ```
